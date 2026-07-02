@@ -1,0 +1,28 @@
+# ناوبری
+npx expo install @react-navigation/native @react-navigation/native-stack @react-navigation/bottom-tabs
+npx expo install react-native-screens react-native-safe-area-context
+npx expo install react-native-gesture-handler react-native-reanimated
+
+# Expo Router
+npx expo install expo-router
+
+# آیکون‌ها
+npx expo install @expo/vector-icons
+
+# ذخیره‌سازی محلی
+npx expo install @react-native-async-storage/async-storage
+
+# دوربین و گالری
+npx expo install expo-image-picker expo-camera
+
+# Linear Gradient (رنگ‌های فانتزی)
+npx expo install expo-linear-gradient
+
+# Blur Effect (افکت محو)
+npx expo install expo-blur
+
+# Haptic Feedback (لرزش)
+npx expo install expo-haptics
+
+# Status Bar
+npx expo install expo-status-bar
