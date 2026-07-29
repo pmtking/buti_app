@@ -1,133 +1,198 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { Tabs } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
-import { View, StyleSheet, Dimensions, Text, TouchableOpacity } from 'react-native';
+import {
+  View,
+  StyleSheet,
+  Dimensions,
+  Text,
+  TouchableOpacity,
+  Image,
+  Platform,
+} from 'react-native';
+import Svg, { Path } from 'react-native-svg';
+import { Home, Image as GalleryIcon, LayoutGrid } from 'lucide-react-native';
 import { FancyBottomMenu } from '@/components/BottomMenu';
-// import { FancyBottomMenu } from '../../src/core/components/FancyBottomMenu'; // مسیر کامپوننت منوی فانتزی
 
-const { width } = Dimensions.get('window');
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
+
+// ابعاد دقیق بر اساس طرح تصویری
+const BAR_HEIGHT = 65;
+const FAB_SIZE = 56;
+const CURVE_RADIUS = 36;
+const HORIZONTAL_MARGIN = 16;
+const SVG_WIDTH = SCREEN_WIDTH - HORIZONTAL_MARGIN * 2;
+
+/**
+ * الگوریتم تولید SVG Path برای برش قوس‌دار در مرکز (Notch)
+ */
+const createBarPath = (width: number, height: number): string => {
+  const center = width / 2;
+  const r = CURVE_RADIUS;
+
+  return `
+    M 20 0
+    H ${center - r - 8}
+    C ${center - r} 0, ${center - r + 4} ${r * 0.75}, ${center - r + 12} ${r * 0.75}
+    C ${center - 14} ${r * 0.8}, ${center - 14} ${r * 0.82}, ${center} ${r * 0.82}
+    C ${center + 14} ${r * 0.82}, ${center + 14} ${r * 0.8}, ${center + r - 12} ${r * 0.75}
+    C ${center + r - 4} ${r * 0.75}, ${center + r} 0, ${center + r + 8} 0
+    H ${width - 20}
+    Q ${width} 0, ${width} 20
+    V ${height - 16}
+    Q ${width} ${height}, ${width - 20} ${height}
+    H 20
+    Q 0 ${height}, 0 ${height - 16}
+    V 20
+    Q 0 0, 20 0
+    Z
+  `;
+};
 
 export default function TabLayout() {
-  // استیت کنترل باز و بسته شدن منوی فانتزی پایینی
   const [isMenuOpen, setIsMenuOpen] = useState(false);
 
+  // محاسبه محاسبات سنگین SVG تنها یک بار
+  const svgPath = useMemo(() => createBarPath(SVG_WIDTH, BAR_HEIGHT), []);
+
   return (
-    <View style={{ flex: 1, backgroundColor: '#0A0A0C' }}>
+    <View style={{ flex: 1, backgroundColor: '#C7D2FE' }}>
       <Tabs
         screenOptions={{
           headerShown: false,
         }}
-        // استفاده از پروپ tabBar برای جایگزینی کلاینت پیش‌فرض با ناوبری سفارشی نئونی شما
         tabBar={({ state, navigation }) => {
+          // دریافت تب فعلی جهت فعال‌سازی استایل
+          const activeRouteName = state.routes[state.index].name;
+
           return (
             <View style={styles.container}>
-              <View style={styles.navBar}>
-                
-                {/* ۱. تب پروفایل */}
+              {/* ۱. پس‌زمینه منحنی SVG سفید با سایه نرم */}
+              <View style={styles.svgWrapper}>
+                <Svg width={SVG_WIDTH} height={BAR_HEIGHT}>
+                  <Path d={svgPath} fill="#FFFFFF" />
+                </Svg>
+              </View>
+
+              {/* ۲. محتوای ناوبری و دکمه‌ها */}
+              <View style={styles.navBarContent}>
+                {/* بخش ۱ (چپ): آواتار پزشک */}
                 <TouchableOpacity
                   style={styles.tabItem}
                   onPress={() => navigation.navigate('profile')}
-                  activeOpacity={0.7}
+                  activeOpacity={0.8}
                 >
-                  <Ionicons 
-                    name="person" 
-                    size={22} 
-                    color={state.index === 1 ? '#007AFF' : 'rgba(255, 255, 255, 0.4)'} 
-                  />
-                  <Text style={[styles.tabText, state.index === 1 && styles.activeText]}>پروفایل</Text>
+                  <View style={styles.avatarBorder}>
+                    <Image
+                      source={{ uri: 'https://via.placeholder.com/150' }} // آدرس عکس پزشک
+                      style={styles.avatarImage}
+                    />
+                  </View>
+                  <Text style={styles.avatarText} numberOfLines={1}>
+                    Dr.mohammad
+                  </Text>
                 </TouchableOpacity>
 
-                {/* ۲. دکمه مرکزی دایره‌ای فانتزی برای تریگر کردن منوی کنترل‌سنتر پلتفرم */}
-                <View style={styles.centerTabContainer}>
-                  <TouchableOpacity
-                    style={[styles.centerButton, isMenuOpen && styles.activeCenterButton]}
-                    onPress={() => setIsMenuOpen(true)} // باز کردن منوی فانتزی پایینی
-                    activeOpacity={0.85}
-                  >
-                    <Ionicons name="apps" size={24} color="#FFF" />
-                  </TouchableOpacity>
-                  <Text style={[styles.tabText, { marginTop: 4 }]}>منو خدمات</Text>
-                </View>
-
-                {/* ۳. تب جستجو و پزشکان */}
-                <TouchableOpacity
-                  style={styles.tabItem}
-                  onPress={() => navigation.navigate('explore')}
-                  activeOpacity={0.7}
-                >
-                  <Ionicons 
-                    name="search" 
-                    size={22} 
-                    color={state.index === 0 ? '#007AFF' : 'rgba(255, 255, 255, 0.4)'} 
-                  />
-                  <Text style={[styles.tabText, state.index === 0 && styles.activeText]}>جستجو</Text>
-                </TouchableOpacity>
-
-                {/* ۴. تب خانه */}
+                {/* بخش ۲: خانه */}
                 <TouchableOpacity
                   style={styles.tabItem}
                   onPress={() => navigation.navigate('index')}
                   activeOpacity={0.7}
                 >
-                  <Ionicons 
-                    name="home" 
-                    size={22} 
-                    color={state.index === 2 ? '#007AFF' : 'rgba(255, 255, 255, 0.4)'} 
+                  <Home
+                    size={26}
+                    color={activeRouteName === 'index' ? '#1E293B' : '#64748B'}
+                    strokeWidth={2.2}
                   />
-                  <Text style={[styles.tabText, state.index === 2 && styles.activeText]}>خانه</Text>
                 </TouchableOpacity>
 
+                {/* بخش ۳ (مرکز): دکمه شناور AI */}
+                <View style={styles.centerFabWrapper}>
+                  <TouchableOpacity
+                    style={styles.fabButton}
+                    onPress={() => setIsMenuOpen(true)}
+                    activeOpacity={0.85}
+                  >
+                    <LayoutGrid size={28} color="#475569" strokeWidth={2.2} />
+                  </TouchableOpacity>
+                  <Text style={styles.aiLabel}>Ai</Text>
+                </View>
+
+                {/* بخش ۴: گالری/پست‌ها */}
+                <TouchableOpacity
+                  style={styles.tabItem}
+                  onPress={() => navigation.navigate('explore')}
+                  activeOpacity={0.7}
+                >
+                  <GalleryIcon
+                    size={26}
+                    color={activeRouteName === 'explore' ? '#1E293B' : '#64748B'}
+                    strokeWidth={2.2}
+                  />
+                </TouchableOpacity>
+
+                {/* بخش ۵ (راست): زبان */}
+                <TouchableOpacity
+                  style={styles.tabItem}
+                  onPress={() => {
+                    /* توابع تغییر زبان */
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <View style={styles.flagBox}>
+                    <View style={[styles.flagStripe, { backgroundColor: '#22C55E' }]} />
+                    <View style={[styles.flagStripe, { backgroundColor: '#FFFFFF' }]} />
+                    <View style={[styles.flagStripe, { backgroundColor: '#EF4444' }]} />
+                  </View>
+                  <Text style={styles.languageText}>زبان</Text>
+                </TouchableOpacity>
               </View>
             </View>
           );
         }}
       >
-        <Tabs.Screen name="explore" options={{ title: 'جستجو' }} />
-        <Tabs.Screen name="profile" options={{ title: 'پروفایل' }} />
         <Tabs.Screen name="index" options={{ title: 'خانه' }} />
+        <Tabs.Screen name="explore" options={{ title: 'گالری' }} />
+        <Tabs.Screen name="profile" options={{ title: 'پروفایل' }} />
       </Tabs>
 
-      {/* تزریق هم‌تراز منوی فانتزی پایینی به بدنه ناوبری اصلی */}
-      <FancyBottomMenu 
-        isOpen={isMenuOpen} 
-        onClose={() => setIsMenuOpen(false)} 
+      {/* منوی فانتزی پایینی */}
+      <FancyBottomMenu
+        isOpen={isMenuOpen}
+        onClose={() => setIsMenuOpen(false)}
         onNavigate={(route) => {
-          console.log(`هدایت هوشمند به بخش: ${route}`);
-          // در صورت نیاز به روت‌زدن خارج از تب‌بار می‌توانی از router.push استفاده کنی
+          console.log(`هدایت هوشمند به: ${route}`);
         }}
       />
     </View>
   );
 }
 
-// استایل‌های پیشرفته کپسولی و نئون‌دار
 const styles = StyleSheet.create({
   container: {
     position: 'absolute',
-    bottom: 0,
-    width: width,
-    backgroundColor: 'transparent',
+    bottom: Platform.OS === 'ios' ? 24 : 16,
+    left: 0,
+    right: 0,
     alignItems: 'center',
     justifyContent: 'center',
     zIndex: 99,
   },
-  navBar: {
+  svgWrapper: {
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.08,
+    shadowRadius: 14,
+    elevation: 8,
+  },
+  navBarContent: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    width: SVG_WIDTH,
     flexDirection: 'row',
-    width: width * 0.90,          // ایجاد حالت معلق و کپسولی فوق‌العاده ترند
-    height: 72,
-    backgroundColor: '#14141C',   // رنگ تیره و عمیق هماهنگ با تم دارک
-    borderRadius: 26,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.07)',
-    paddingHorizontal: 10,
     alignItems: 'center',
     justifyContent: 'space-between',
-    bottom: 25,                   // فاصله تعلیق از کف اسکرین
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 12 },
-    shadowOpacity: 0.45,
-    shadowRadius: 16,
-    elevation: 10,
+    paddingHorizontal: 12,
   },
   tabItem: {
     flex: 1,
@@ -135,39 +200,69 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     height: '100%',
   },
-  tabText: {
-    color: '#8E8E93',
-    fontSize: 10,
-    fontFamily: 'YekanBakh-Medium',
-    marginTop: 3,
+  /* ۱. استایل اختصاصی آواتار پزشک */
+  avatarBorder: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    borderWidth: 2,
+    borderColor: '#22C55E', // حاشیه سبز مشابه طرح
+    overflow: 'hidden',
+    backgroundColor: '#E2E8F0',
   },
-  activeText: {
-    color: '#007AFF', // تم رنگی اختصاصی مدیکال پلتفرم شما
+  avatarImage: {
+    width: '100%',
+    height: '100%',
   },
-  /* پوزیشن و انیمیشن بصری دکمه فانتزی میانی */
-  centerTabContainer: {
-    flex: 1,
+  avatarText: {
+    fontSize: 9,
+    color: '#475569',
+    marginTop: 2,
+    fontWeight: '500',
+  },
+  /* ۲. استایل دکمه شناور مرکزی (Ai) */
+  centerFabWrapper: {
+    position: 'relative',
+    top: -16,
     alignItems: 'center',
     justifyContent: 'center',
-    top: -18,
+    width: FAB_SIZE,
   },
-  centerButton: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    backgroundColor: '#1E1E2E',
-    borderWidth: 3,
-    borderColor: '#007AFF',
+  fabButton: {
+    width: FAB_SIZE,
+    height: FAB_SIZE,
+    borderRadius: FAB_SIZE / 2,
+    backgroundColor: '#FFFFFF',
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#007AFF',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.4,
-    shadowRadius: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.12,
+    shadowRadius: 6,
     elevation: 5,
   },
-  activeCenterButton: {
-    backgroundColor: '#007AFF',
-    borderColor: '#00E5FF',
+  aiLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#1E293B',
+    marginTop: 2,
+  },
+  /* ۳. استایل آیکون زبان */
+  flagBox: {
+    width: 22,
+    height: 14,
+    borderRadius: 2,
+    overflow: 'hidden',
+    borderWidth: 0.5,
+    borderColor: '#CBD5E1',
+  },
+  flagStripe: {
+    flex: 1,
+    width: '100%',
+  },
+  languageText: {
+    fontSize: 9,
+    color: '#475569',
+    marginTop: 2,
   },
 });
