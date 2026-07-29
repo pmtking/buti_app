@@ -1,5 +1,5 @@
 import React, { memo, useState, useEffect, useRef, useMemo } from 'react';
-import { View, Text, Image, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, Text, Image, TouchableOpacity, StyleSheet, Platform } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MedicalPost } from '@/types/post';
 
@@ -51,9 +51,13 @@ const PostCardComponent: React.FC<PostCardProps> = ({ item, onPress }) => {
     };
   }, [item.imageUrl, item.aspectRatio]);
 
-  // اعمال aspectRatio مستقیماً روی کانتینر والد تا iOS ارتفاع را درست بشناسد
   const containerStyle = useMemo(
-    () => [styles.cardContainer, { aspectRatio }],
+    () => [
+      styles.cardContainer,
+      { aspectRatio },
+      // فیکس مهم برای iOS: اجبار به داشتن حداقل ارتفاع در لحظه لود اولیه
+      { minHeight: 160 }, 
+    ],
     [aspectRatio]
   );
 
@@ -63,7 +67,7 @@ const PostCardComponent: React.FC<PostCardProps> = ({ item, onPress }) => {
       onPress={() => onPress?.(item)}
       style={containerStyle}
     >
-      {/* عکس اصلی */}
+      {/* عکس اصلی با absoluteFillObject جهت اجبار به پر کردن کانتینر در iOS */}
       <Image
         source={{ uri: item.imageUrl }}
         style={styles.postImage}
@@ -120,9 +124,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#1E293B',
     position: 'relative',
     marginBottom: 10,
-    // در iOS داشتن aspectRatio روی این والد الزامی است تا ارتفاع کارت مشخص شود
   },
   postImage: {
+    ...StyleSheet.absoluteFillObject, // کلیدی برای رندر شدن صحیح در iOS
     width: '100%',
     height: '100%',
   },

@@ -1,5 +1,5 @@
-import React, { useState, useMemo } from 'react';
-import { Tabs } from 'expo-router';
+import React, { useMemo } from 'react';
+import { Tabs, useRouter } from 'expo-router';
 import {
   View,
   StyleSheet,
@@ -11,20 +11,15 @@ import {
 } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import { Home, Image as GalleryIcon, LayoutGrid } from 'lucide-react-native';
-import { FancyBottomMenu } from '@/components/BottomMenu';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
-// ابعاد دقیق بر اساس طرح تصویری
 const BAR_HEIGHT = 65;
 const FAB_SIZE = 56;
 const CURVE_RADIUS = 36;
 const HORIZONTAL_MARGIN = 16;
 const SVG_WIDTH = SCREEN_WIDTH - HORIZONTAL_MARGIN * 2;
 
-/**
- * الگوریتم تولید SVG Path برای برش قوس‌دار در مرکز (Notch)
- */
 const createBarPath = (width: number, height: number): string => {
   const center = width / 2;
   const r = CURVE_RADIUS;
@@ -49,20 +44,22 @@ const createBarPath = (width: number, height: number): string => {
 };
 
 export default function TabLayout() {
-  const [isMenuOpen, setIsMenuOpen] = useState(false);
-
-  // محاسبه محاسبات سنگین SVG تنها یک بار
+  const router = useRouter();
   const svgPath = useMemo(() => createBarPath(SVG_WIDTH, BAR_HEIGHT), []);
 
   return (
-    <View style={{ flex: 1, backgroundColor: '#C7D2FE' }}>
+    <View style={{ flex: 1, backgroundColor: '#0F172A' }}>
       <Tabs
         screenOptions={{
           headerShown: false,
         }}
         tabBar={({ state, navigation }) => {
-          // دریافت تب فعلی جهت فعال‌سازی استایل
           const activeRouteName = state.routes[state.index].name;
+
+          // اگر کاربر روی صفحه ai بود، نوار ناوبری پایین را کلاً مخفی کن تا روی چت نیفتد
+          if (activeRouteName === 'ai') {
+            return null;
+          }
 
           return (
             <View style={styles.container}>
@@ -83,7 +80,7 @@ export default function TabLayout() {
                 >
                   <View style={styles.avatarBorder}>
                     <Image
-                      source={{ uri: 'https://via.placeholder.com/150' }} // آدرس عکس پزشک
+                      source={{ uri: 'https://via.placeholder.com/150' }}
                       style={styles.avatarImage}
                     />
                   </View>
@@ -105,14 +102,14 @@ export default function TabLayout() {
                   />
                 </TouchableOpacity>
 
-                {/* بخش ۳ (مرکز): دکمه شناور AI */}
+                {/* بخش ۳ (مرکز): هدایت مستقیم به صفحه AI */}
                 <View style={styles.centerFabWrapper}>
                   <TouchableOpacity
                     style={styles.fabButton}
-                    onPress={() => setIsMenuOpen(true)}
+                    onPress={() => router.push('/ai')}
                     activeOpacity={0.85}
                   >
-                    <LayoutGrid size={28} color="#475569" strokeWidth={2.2} />
+                    <LayoutGrid size={28} color="#0284C7" strokeWidth={2.2} />
                   </TouchableOpacity>
                   <Text style={styles.aiLabel}>Ai</Text>
                 </View>
@@ -133,9 +130,7 @@ export default function TabLayout() {
                 {/* بخش ۵ (راست): زبان */}
                 <TouchableOpacity
                   style={styles.tabItem}
-                  onPress={() => {
-                    /* توابع تغییر زبان */
-                  }}
+                  onPress={() => {}}
                   activeOpacity={0.7}
                 >
                   <View style={styles.flagBox}>
@@ -153,16 +148,8 @@ export default function TabLayout() {
         <Tabs.Screen name="index" options={{ title: 'خانه' }} />
         <Tabs.Screen name="explore" options={{ title: 'گالری' }} />
         <Tabs.Screen name="profile" options={{ title: 'پروفایل' }} />
+        <Tabs.Screen name="ai" options={{ href: null }} />
       </Tabs>
-
-      {/* منوی فانتزی پایینی */}
-      <FancyBottomMenu
-        isOpen={isMenuOpen}
-        onClose={() => setIsMenuOpen(false)}
-        onNavigate={(route) => {
-          console.log(`هدایت هوشمند به: ${route}`);
-        }}
-      />
     </View>
   );
 }
@@ -200,13 +187,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     height: '100%',
   },
-  /* ۱. استایل اختصاصی آواتار پزشک */
   avatarBorder: {
     width: 36,
     height: 36,
     borderRadius: 18,
     borderWidth: 2,
-    borderColor: '#22C55E', // حاشیه سبز مشابه طرح
+    borderColor: '#22C55E',
     overflow: 'hidden',
     backgroundColor: '#E2E8F0',
   },
@@ -220,7 +206,6 @@ const styles = StyleSheet.create({
     marginTop: 2,
     fontWeight: '500',
   },
-  /* ۲. استایل دکمه شناور مرکزی (Ai) */
   centerFabWrapper: {
     position: 'relative',
     top: -16,
@@ -247,7 +232,6 @@ const styles = StyleSheet.create({
     color: '#1E293B',
     marginTop: 2,
   },
-  /* ۳. استایل آیکون زبان */
   flagBox: {
     width: 22,
     height: 14,
