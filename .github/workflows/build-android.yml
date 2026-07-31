@@ -8,63 +8,35 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    
     steps:
-      - name: 📥 Checkout code
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: 🔧 Setup Node.js
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
-          cache: 'npm'
+          node-version: 18
 
-      - name: 📦 Install dependencies
-        run: npm ci
+      - name: Install dependencies
+        run: npm install
 
-      - name: 📱 Install Expo
-        run: npm install -g expo
-
-      - name: 🏗️ Prebuild (create android folder)
+      - name: Prebuild
         run: npx expo prebuild --clean
 
-      - name: 🔧 Fix compileSdk (if missing)
-        run: |
-          if ! grep -q "compileSdk" android/app/build.gradle; then
-            sed -i '/android {/a \ \ \ \ compileSdk 34' android/app/build.gradle
-          fi
-
-      - name: 🔄 Add Aliyun mirrors (for Iran)
-        run: |
-          if ! grep -q "aliyun" android/build.gradle; then
-            sed -i '/repositories {/a \ \ \ \ maven { url "https://maven.aliyun.com/repository/public" }\n\ \ \ \ maven { url "https://maven.aliyun.com/repository/google" }' android/build.gradle
-          fi
-
-      - name: 💾 Cache Gradle
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
-          restore-keys: |
-            ${{ runner.os }}-gradle-
-
-      - name: 🛠️ Build APK (Debug)
+      - name: Build APK (to generate cache)
         run: |
           cd android
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon
 
-      - name: 📂 List output files
-        run: |
-          ls -la android/app/build/outputs/apk/debug/ || echo "❌ No APK found!"
+      - name: Upload Gradle cache
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-cache
+          path: ~/.gradle/caches/
 
-      - name: 📤 Upload APK
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: app-debug
           path: android/app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
-          retention-days: 7
-        continue-on-error: true  # اگر آپلود نشد، کل workflow خراب نشود
