@@ -3,7 +3,7 @@ name: Build Android APK
 on:
   push:
     branches: [ main ]
-  workflow_dispatch:  # این خط به شما اجازه می‌دهد دستی اجرا کنید
+  workflow_dispatch:
 
 jobs:
   build:
@@ -20,14 +20,41 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      - name: Install Expo CLI
+        run: npm install -g expo-cli
+
       - name: Prebuild (create android folder)
         run: npx expo prebuild
+
+      - name: Fix Gradle repositories for Iran
+        run: |
+          # تنظیم مخازن علی‌یون برای دور زدن تحریم
+          cat << EOF >> android/build.gradle
+          buildscript {
+            repositories {
+              maven { url 'https://maven.aliyun.com/repository/public' }
+              maven { url 'https://maven.aliyun.com/repository/google' }
+              maven { url 'https://maven.aliyun.com/repository/gradle-plugin' }
+              google()
+              mavenCentral()
+            }
+          }
+          allprojects {
+            repositories {
+              maven { url 'https://maven.aliyun.com/repository/public' }
+              maven { url 'https://maven.aliyun.com/repository/google' }
+              google()
+              mavenCentral()
+              maven { url 'https://www.jitpack.io' }
+            }
+          }
+          EOF
 
       - name: Build APK
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assembleDebug
+          ./gradlew assembleDebug --no-daemon
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
