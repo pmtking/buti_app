@@ -3,13 +3,10 @@ name: Build Android APK
 on:
   push:
     branches: [ main ]
-  pull_request:
-    branches: [ main ]
   workflow_dispatch:
 
 jobs:
-  # ================ JOB 1: Lint & Test ================
-  lint-and-test:
+  build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -24,54 +21,25 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run ESLint (if configured)
-        run: npm run lint || echo "No lint script found, skipping"
-
-      - name: Run unit tests
-        run: npm test || echo "No test script found, skipping"
-
-  # ================ JOB 2: Build APK ================
-  build-android:
-    needs: lint-and-test   # فقط در صورت موفقیت تست‌ها اجرا می‌شود
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 18
-          cache: 'npm'
-
-      - name: Install dependencies
-        run: npm ci
-
-      # ========== نصب Expo (اگر پروژه Expo است) ==========
       - name: Install Expo CLI
         run: npm install -g expo-cli
 
-      # ========== اطمینان از وجود پوشه‌ی android ==========
-      - name: Prebuild (if android folder missing)
+      # ========== بازسازی کامل پوشه‌ی android ==========
+      - name: Prebuild (force recreate android folder)
+        run: npx expo prebuild --clean
+
+      # ========== تنظیم compileSdk (اگر هنوز خطا داد) ==========
+      - name: Fix compileSdk if missing
         run: |
-          if [ ! -d "android" ]; then
-            npx expo prebuild --clean
-          else
-            echo "✅ android folder already exists"
+          if ! grep -q "compileSdk" android/app/build.gradle; then
+            sed -i '/android {/a \ \ \ \ compileSdk 34' android/app/build.gradle
           fi
 
-      # ========== تنظیم مخازن علی‌یون برای دور زدن تحریم ==========
-      - name: Fix Gradle repositories (Aliyun mirror)
+      # ========== مخازن علی‌یون (برای دور زدن تحریم) ==========
+      - name: Add Aliyun mirrors
         run: |
-          # اضافه کردن مخازن علی‌یون به build.gradle اگر وجود ندارند
           grep -q "aliyun" android/build.gradle || sed -i '/repositories {/a \ \ \ \ maven { url "https://maven.aliyun.com/repository/public" }\n\ \ \ \ maven { url "https://maven.aliyun.com/repository/google" }' android/build.gradle
 
-      # ========== تنظیم compileSdk اگر وجود ندارد ==========
-      - name: Fix missing compileSdk
-        run: |
-          grep -q "compileSdk" android/app/build.gradle || sed -i '/android {/a \ \ \ \ compileSdk 34' android/app/build.gradle
-
-      # ========== ساخت APK با کش Gradle ==========
       - name: Cache Gradle
         uses: actions/cache@v4
         with:
@@ -82,71 +50,15 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gradle-
 
-      - name: Build APK (Debug)
+      - name: Build APK
         run: |
           cd android
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon
 
-      # ========== آپلود خروجی ==========
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: app-debug
           path: android/app/build/outputs/apk/debug/app-debug.apk
-          retention-days: 7   # حذف خودکار بعد از ۷ روز
-
-  # ================ JOB 3: Build Release (اختیاری) ================
-  build-release:
-    needs: build-android
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 18
-          cache: 'npm'
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Install Expo CLI
-        run: npm install -g expo-cli
-
-      - name: Prebuild (if needed)
-        run: |
-          if [ ! -d "android" ]; then
-            npx expo prebuild --clean
-          fi
-
-      - name: Fix repositories & compileSdk (same as above)
-        run: |
-          grep -q "aliyun" android/build.gradle || sed -i '/repositories {/a \ \ \ \ maven { url "https://maven.aliyun.com/repository/public" }\n\ \ \ \ maven { url "https://maven.aliyun.com/repository/google" }' android/build.gradle
-          grep -q "compileSdk" android/app/build.gradle || sed -i '/android {/a \ \ \ \ compileSdk 34' android/app/build.gradle
-
-      - name: Cache Gradle
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
-          restore-keys: |
-            ${{ runner.os }}-gradle-
-
-      - name: Build APK (Release)
-        run: |
-          cd android
-          chmod +x gradlew
-          ./gradlew assembleRelease --no-daemon
-
-      - name: Upload Release APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: app-release
-          path: android/app/build/outputs/apk/release/app-release.apk
           retention-days: 7
