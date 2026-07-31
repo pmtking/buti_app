@@ -20,35 +20,8 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Install Expo CLI
-        run: npm install -g expo-cli
-
-      - name: Prebuild (create android folder)
-        run: npx expo prebuild
-
-      - name: Fix Gradle repositories for Iran
-        run: |
-          # تنظیم مخازن علی‌یون برای دور زدن تحریم
-          cat << EOF >> android/build.gradle
-          buildscript {
-            repositories {
-              maven { url 'https://maven.aliyun.com/repository/public' }
-              maven { url 'https://maven.aliyun.com/repository/google' }
-              maven { url 'https://maven.aliyun.com/repository/gradle-plugin' }
-              google()
-              mavenCentral()
-            }
-          }
-          allprojects {
-            repositories {
-              maven { url 'https://maven.aliyun.com/repository/public' }
-              maven { url 'https://maven.aliyun.com/repository/google' }
-              google()
-              mavenCentral()
-              maven { url 'https://www.jitpack.io' }
-            }
-          }
-          EOF
+      # چون فایل build.gradle از قبل در مخزن تنظیم شده، نیازی به Fix نیست
+      # چون پوشه‌ی android در مخزن هست، نیازی به Prebuild نیست
 
       - name: Build APK
         run: |
