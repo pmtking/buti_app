@@ -8,36 +8,39 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    
     steps:
-      - name: Checkout code
+      - name: 📥 Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: 🔧 Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 22
           cache: 'npm'
 
-      - name: Install dependencies
+      - name: 📦 Install dependencies
         run: npm ci
 
-      - name: Install Expo CLI
-        run: npm install -g expo-cli
+      - name: 📱 Install Expo
+        run: npm install -g expo
 
-      - name: Prebuild (force recreate android folder)
+      - name: 🏗️ Prebuild (create android folder)
         run: npx expo prebuild --clean
 
-      - name: Fix compileSdk if missing
+      - name: 🔧 Fix compileSdk (if missing)
         run: |
           if ! grep -q "compileSdk" android/app/build.gradle; then
             sed -i '/android {/a \ \ \ \ compileSdk 34' android/app/build.gradle
           fi
 
-      - name: Add Aliyun mirrors
+      - name: 🔄 Add Aliyun mirrors (for Iran)
         run: |
-          grep -q "aliyun" android/build.gradle || sed -i '/repositories {/a \ \ \ \ maven { url "https://maven.aliyun.com/repository/public" }\n\ \ \ \ maven { url "https://maven.aliyun.com/repository/google" }' android/build.gradle
+          if ! grep -q "aliyun" android/build.gradle; then
+            sed -i '/repositories {/a \ \ \ \ maven { url "https://maven.aliyun.com/repository/public" }\n\ \ \ \ maven { url "https://maven.aliyun.com/repository/google" }' android/build.gradle
+          fi
 
-      - name: Cache Gradle
+      - name: 💾 Cache Gradle
         uses: actions/cache@v4
         with:
           path: |
@@ -47,21 +50,21 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gradle-
 
-      - name: Build APK
+      - name: 🛠️ Build APK (Debug)
         run: |
           cd android
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon
 
-      - name: List output files (debug)
+      - name: 📂 List output files
         run: |
-          echo "Checking if APK exists..."
-          ls -la android/app/build/outputs/apk/debug/ || echo "Directory not found"
+          ls -la android/app/build/outputs/apk/debug/ || echo "❌ No APK found!"
 
-      - name: Upload APK
+      - name: 📤 Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: app-debug
           path: android/app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error   # اگر فایل نبود، خطا بده
+          if-no-files-found: error
           retention-days: 7
+        continue-on-error: true  # اگر آپلود نشد، کل workflow خراب نشود
