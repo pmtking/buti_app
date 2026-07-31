@@ -24,18 +24,15 @@ jobs:
       - name: Install Expo CLI
         run: npm install -g expo-cli
 
-      # ========== بازسازی کامل پوشه‌ی android ==========
       - name: Prebuild (force recreate android folder)
         run: npx expo prebuild --clean
 
-      # ========== تنظیم compileSdk (اگر هنوز خطا داد) ==========
       - name: Fix compileSdk if missing
         run: |
           if ! grep -q "compileSdk" android/app/build.gradle; then
             sed -i '/android {/a \ \ \ \ compileSdk 34' android/app/build.gradle
           fi
 
-      # ========== مخازن علی‌یون (برای دور زدن تحریم) ==========
       - name: Add Aliyun mirrors
         run: |
           grep -q "aliyun" android/build.gradle || sed -i '/repositories {/a \ \ \ \ maven { url "https://maven.aliyun.com/repository/public" }\n\ \ \ \ maven { url "https://maven.aliyun.com/repository/google" }' android/build.gradle
@@ -56,9 +53,15 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon
 
+      - name: List output files (debug)
+        run: |
+          echo "Checking if APK exists..."
+          ls -la android/app/build/outputs/apk/debug/ || echo "Directory not found"
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: app-debug
           path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error   # اگر فایل نبود، خطا بده
           retention-days: 7
