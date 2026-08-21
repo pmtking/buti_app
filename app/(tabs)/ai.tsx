@@ -42,8 +42,6 @@ import {
   RotateCcw,
   Sparkles,
   ScanFace,
-  Info,
-  Sun,
   Wand2,
   Eye,
   Check,
@@ -51,9 +49,6 @@ import {
   SlidersHorizontal,
   Send,
   MessageCircle,
-  Zap,
-  Heart,
-  CircleDot,
   Layers,
   Rotate3D,
   Brain,
@@ -61,10 +56,7 @@ import {
   Minus,
   RefreshCw,
   Image as ImageIcon,
-  Maximize2,
-  Scan,
   ShieldCheck,
-  Activity,
 } from 'lucide-react-native';
 
 // ✅ ایمپورت سرویس API
@@ -347,7 +339,6 @@ export default function AiScreen() {
   ======================================================= */
 
   const scanAnimation = useRef(new Animated.Value(0)).current;
-  const ringAnimation = useRef(new Animated.Value(0)).current;
   const pulseAnimation = useRef(new Animated.Value(1)).current;
   const aiPulse = useRef(new Animated.Value(1)).current;
   const simulationAnimation = useRef(new Animated.Value(0)).current;
@@ -419,30 +410,6 @@ export default function AiScreen() {
       scanAnimation.stopAnimation();
     };
   }, [isScanning]);
-
-  /* =======================================================
-     RING
-  ======================================================= */
-
-  useEffect(() => {
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(ringAnimation, {
-          toValue: 1,
-          duration: 2200,
-          easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
-        }),
-        Animated.timing(ringAnimation, {
-          toValue: 0,
-          duration: 2200,
-          easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
-        }),
-      ])
-    ).start();
-    return () => ringAnimation.stopAnimation();
-  }, []);
 
   /* =======================================================
      HOME PULSE
@@ -917,85 +884,76 @@ export default function AiScreen() {
   return (
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <View style={styles.container}>
-        <LinearGradient colors={['#090A0C', '#111113', '#090A0C']} style={StyleSheet.absoluteFill} />
+        <LinearGradient colors={['#0A0A0E', '#131018', '#0A0A0E']} style={StyleSheet.absoluteFill} />
+        {/* ambient top glow */}
+        <View style={styles.ambientGlow} pointerEvents="none" />
         <SafeAreaView style={styles.safeArea}>
           {/* HEADER */}
           <View style={styles.analysisHeader}>
-            <TouchableOpacity style={styles.headerIconButton} onPress={resetAll}>
-              <ArrowLeft size={18} color="#FFFFFF" strokeWidth={1.8} />
-              <Text style={styles.backText}>Back</Text>
+            <TouchableOpacity style={styles.headerIconButton} onPress={resetAll} activeOpacity={0.7}>
+              <View style={styles.headerIconChip}>
+                <ArrowLeft size={15} color="#E7C6D8" strokeWidth={2} />
+              </View>
             </TouchableOpacity>
             <View style={styles.headerCenter}>
               <Text style={styles.analysisTitle}>BUTI AI Studio</Text>
               <View style={styles.analysisMode}>
-                <View style={styles.modeDot} />
-                <Text style={styles.modeText}>{isScanning ? 'Analyzing' : 'AI Beauty Studio'}</Text>
+                <View style={[styles.modeDot, isScanning && styles.modeDotBusy]} />
+                <Text style={styles.modeText}>
+                  {isScanning ? 'Analyzing…' : analysisDone ? '3D Model Ready' : 'AI Beauty Studio'}
+                </Text>
               </View>
             </View>
-            <TouchableOpacity style={styles.closeButton} onPress={resetAll}>
-              <X size={17} color="#FFFFFF" />
+            <TouchableOpacity style={styles.closeButton} onPress={resetAll} activeOpacity={0.7}>
+              <X size={15} color="#C9C9CE" />
             </TouchableOpacity>
           </View>
 
-          {/* LIGHTING */}
-          <View style={styles.lightingRow}>
-            <Sun size={12} color="#A9A9AF" />
-            <Text style={styles.lightingText}>Lighting</Text>
-            <TouchableOpacity style={styles.lightingToggle} onPress={() => setLighting(!lighting)}>
-              <View style={[styles.toggleDot, lighting && styles.toggleDotActive]} />
-            </TouchableOpacity>
-          </View>
-
-          {/* FACE VIEW - ✅ استفاده از ThreeDViewer */}
+          {/* 3D STAGE */}
           <View style={styles.faceStage}>
-            <Animated.View
-              style={[
-                styles.faceGlow,
-                {
-                  opacity: ringAnimation.interpolate({
-                    inputRange: [0, 1],
-                    outputRange: [0.25, 0.5],
-                  }),
-                },
-              ]}
-            />
-            <View style={styles.faceOvalOuter}>
-              <View style={styles.faceOvalInner}>
+            <View style={styles.stageCard}>
+              {/* gradient border glow */}
+              <LinearGradient
+                colors={['rgba(217,154,185,0.45)', 'rgba(217,154,185,0.06)', 'rgba(130,212,173,0.25)']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={styles.stageBorder}
+              />
+              <View style={styles.stageInner}>
                 {capturedImage ? (
                   <ThreeDViewer
                     vertices={threeDData?.vertices}
                     faces={threeDData?.faces}
-                    textureBase64={threeDData?.texture || capturedImage}
+                    textureBase64={
+                      showBefore ? capturedImage : threeDData?.texture || capturedImage
+                    }
                     isLoading={isLoading || isScanning}
-                    autoRotate={analysisDone}
+                    autoRotate={analysisDone && !showBefore}
                   />
                 ) : (
                   <View style={styles.emptyFace}>
-                    <Camera size={40} color="#55555C" />
+                    <Camera size={36} color="#4A4A52" />
+                    <Text style={styles.emptyFaceText}>هنوز تصویری انتخاب نشده</Text>
                   </View>
                 )}
-                <LinearGradient
-                  colors={['transparent', 'rgba(0,0,0,0.02)', 'rgba(0,0,0,0.48)']}
-                  style={StyleSheet.absoluteFill}
-                />
+
+                {/* scan line */}
                 {isScanning && (
                   <Animated.View
-                    style={[
-                      styles.scanLineNew,
-                      {
-                        transform: [
-                          {
-                            translateY: scanAnimation.interpolate({
-                              inputRange: [0, 1],
-                              outputRange: [-170, 170],
-                            }),
-                          },
-                        ],
-                      },
-                    ]}
+                    style={[styles.scanLineNew, {
+                      transform: [{
+                        translateY: scanAnimation.interpolate({
+                          inputRange: [0, 1],
+                          outputRange: [-170, 170],
+                        }),
+                      }],
+                    }]}
+                    pointerEvents="none"
                   />
                 )}
-                {!isScanning && analysisDone && (
+
+                {/* face markers */}
+                {!isScanning && analysisDone && !showBefore && (
                   <>
                     <FaceMarker style={{ top: '36%', left: '25%' }} />
                     <FaceMarker style={{ top: '36%', right: '25%' }} />
@@ -1003,32 +961,38 @@ export default function AiScreen() {
                     <FaceMarker style={{ top: '64%', left: '42%' }} />
                   </>
                 )}
+
+                {/* simulation overlay */}
                 {simulation.active && simulationMode && (
                   <SimulationOverlay part={selectedPart} intensity={simulation.intensity} />
                 )}
               </View>
-              <Animated.View
-                style={[
-                  styles.scanRing,
-                  {
-                    opacity: ringAnimation.interpolate({
-                      inputRange: [0, 1],
-                      outputRange: [0.65, 1],
-                    }),
-                  },
-                ]}
-              />
-            </View>
-            {isScanning && (
-              <View style={styles.analysisOverlay}>
-                <ActivityIndicator size="small" color="#D99AB9" />
-                <Text style={styles.analysisOverlayTitle}>Scanning Your Face</Text>
-                <Text style={styles.analysisOverlaySub}>Face Mapping • Geometry • AI</Text>
+
+              {/* status pill on top of stage */}
+              <View style={styles.stageStatusPill} pointerEvents="none">
+                {isScanning ? (
+                  <>
+                    <ActivityIndicator size={8} color="#D99AB9" />
+                    <Text style={styles.stageStatusText}>Scanning…</Text>
+                  </>
+                ) : analysisDone ? (
+                  <>
+                    <Check size={10} color="#82D4AD" />
+                    <Text style={[styles.stageStatusText, { color: '#A9DEC6' }]}>3D Ready</Text>
+                  </>
+                ) : (
+                  <>
+                    <Sparkles size={10} color="#D99AB9" />
+                    <Text style={styles.stageStatusText}>Waiting</Text>
+                  </>
+                )}
               </View>
-            )}
-            {!isScanning && analysisDone && (
+            </View>
+
+            {/* before/after badge */}
+            {analysisDone && (
               <View style={styles.completedBadge}>
-                <Check size={12} color="#DCA9C1" />
+                <Check size={11} color="#DCA9C1" />
                 <Text style={styles.completedText}>Face Scan Complete</Text>
               </View>
             )}
@@ -1039,17 +1003,20 @@ export default function AiScreen() {
             <TouchableOpacity
               style={[styles.smallAction, showBefore && styles.smallActionActive]}
               onPress={() => setShowBefore(!showBefore)}
+              activeOpacity={0.75}
             >
-              <Eye size={15} color="#E6E6E8" />
-              <Text style={styles.smallActionText}>{showBefore ? 'Show Result' : 'Original'}</Text>
+              <Eye size={13} color={showBefore ? '#E7BCD4' : '#B9B9C0'} />
+              <Text style={[styles.smallActionText, showBefore && styles.smallActionTextActive]}>
+                {showBefore ? 'نتیجه' : 'اصلی'}
+              </Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.smallAction} onPress={handlePickImage}>
-              <Camera size={15} color="#E6E6E8" />
-              <Text style={styles.smallActionText}>Retake</Text>
+            <TouchableOpacity style={styles.smallAction} onPress={handlePickImage} activeOpacity={0.75}>
+              <ImageIcon size={13} color="#B9B9C0" />
+              <Text style={styles.smallActionText}>گالری</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.smallAction} onPress={switchCamera}>
-              <RefreshCw size={15} color="#E6E6E8" />
-              <Text style={styles.smallActionText}>Camera</Text>
+            <TouchableOpacity style={styles.smallAction} onPress={switchCamera} activeOpacity={0.75}>
+              <RefreshCw size={13} color="#B9B9C0" />
+              <Text style={styles.smallActionText}>دوربین</Text>
             </TouchableOpacity>
           </View>
 
@@ -1614,8 +1581,6 @@ const styles = StyleSheet.create({
   liveBottomTextValue: { color: '#C9C9CE', fontSize: 8 },
 
   analysisHeader: { height: 58, paddingHorizontal: 15, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  headerIconButton: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  backText: { color: '#D2D2D5', fontSize: 10 },
   headerCenter: { alignItems: 'center' },
   analysisTitle: { color: '#FFFFFF', fontSize: 15, fontWeight: '800' },
   analysisMode: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 3 },
@@ -1623,24 +1588,49 @@ const styles = StyleSheet.create({
   modeText: { color: '#77777F', fontSize: 7 },
   closeButton: { width: 31, height: 31, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.08)', alignItems: 'center', justifyContent: 'center' },
 
-  lightingRow: { alignSelf: 'center', flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 3 },
-  lightingText: { color: '#A7A7AE', fontSize: 8 },
-  lightingToggle: { width: 25, height: 14, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.10)', justifyContent: 'center', paddingHorizontal: 2 },
-  toggleDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#66666C' },
-  toggleDotActive: { alignSelf: 'flex-end', backgroundColor: '#D99AB9' },
+  ambientGlow: {
+    position: 'absolute',
+    top: -140,
+    alignSelf: 'center',
+    width: width * 1.1,
+    height: 320,
+    borderRadius: 160,
+    backgroundColor: 'rgba(216,137,173,0.07)',
+  },
+  headerIconButton: { width: 34, height: 34, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.05)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)' },
+  headerIconChip: { alignItems: 'center', justifyContent: 'center' },
+  stageCard: {
+    width: width * 0.86,
+    height: 340,
+    borderRadius: 28,
+    padding: 1.5,
+    position: 'relative',
+  },
+  stageBorder: { ...StyleSheet.absoluteFillObject, borderRadius: 28 },
+  stageInner: { flex: 1, borderRadius: 27, overflow: 'hidden', backgroundColor: '#101013' },
+  stageStatusPill: {
+    position: 'absolute',
+    top: 12,
+    right: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 14,
+    backgroundColor: 'rgba(8,8,10,0.72)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.09)',
+  },
+  stageStatusText: { color: '#C9C9CE', fontSize: 8, fontWeight: '800' },
+  emptyFaceText: { color: '#55555C', fontSize: 9, marginTop: 10 },
+  modeDotBusy: { backgroundColor: '#E7BC5A' },
+  smallActionTextActive: { color: '#E7BCD4' },
 
-  faceStage: { height: 390, alignItems: 'center', justifyContent: 'center' },
-  faceGlow: { position: 'absolute', width: width * 0.72, height: width * 0.72, borderRadius: (width * 0.72) / 2, backgroundColor: 'rgba(210,142,174,0.09)' },
-  faceOvalOuter: { width: width * 0.69, height: height * 0.49, borderRadius: width * 0.35, alignItems: 'center', justifyContent: 'center', position: 'relative' },
-  faceOvalInner: { width: '91%', height: '95%', borderRadius: width * 0.33, overflow: 'hidden', backgroundColor: '#1B1B1E', position: 'relative' },
-  faceImage: { width: '100%', height: '100%', resizeMode: 'cover' },
+  faceStage: { height: 360, alignItems: 'center', justifyContent: 'center' },
   emptyFace: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  scanRing: { position: 'absolute', width: '100%', height: '100%', borderRadius: width * 0.35, borderWidth: 4, borderColor: '#86D8B4' },
   scanLineNew: { position: 'absolute', left: 0, right: 0, height: 2, backgroundColor: '#DDA2C1', shadowColor: '#DDA2C1', shadowOpacity: 1, shadowRadius: 12 },
-  analysisOverlay: { position: 'absolute', bottom: 30, alignItems: 'center' },
-  analysisOverlayTitle: { color: '#FFFFFF', fontSize: 11, fontWeight: '800', marginTop: 8 },
-  analysisOverlaySub: { color: '#D99AB9', fontSize: 7, marginTop: 4 },
-  completedBadge: { position: 'absolute', bottom: 25, flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 11, paddingVertical: 7, borderRadius: 15, backgroundColor: 'rgba(8,8,10,0.75)' },
+  completedBadge: { position: 'absolute', bottom: 8, flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 11, paddingVertical: 7, borderRadius: 15, backgroundColor: 'rgba(8,8,10,0.75)' },
   completedText: { color: '#D7D7DB', fontSize: 8 },
 
   faceMarker: { position: 'absolute', width: 17, height: 17, borderRadius: 9, borderWidth: 1, borderColor: 'rgba(220,160,190,0.8)', alignItems: 'center', justifyContent: 'center' },
