@@ -148,6 +148,7 @@ export default function TabLayout() {
         <Tabs.Screen name="index" options={{ title: 'خانه' }} />
         <Tabs.Screen name="explore" options={{ title: 'گالری' }} />
         <Tabs.Screen name="profile" options={{ title: 'پروفایل' }} />
+        <Tabs.Screen name="avatar" options={{ title: 'آواتار ۳بعدی' }} />
         <Tabs.Screen name="ai" options={{ href: null }} />
       </Tabs>
     </View>

@@ -44,6 +44,9 @@ export type ThreeDViewerProps = {
   vertices?: number[] | number[][];
   /** Triangle indices as flat [a,b,c,...] or nested [[a,b,c],...] */
   faces?: number[] | number[][];
+  /** Explicit per-vertex UVs. When provided, AR-filter mode is used:
+   *  camera locked front-on, mesh glued onto the photo texture. */
+  uvs?: number[] | number[][];
   /** JPEG texture as raw base64 (no data-uri prefix) */
   textureBase64?: string;
   /** Show loading overlay */

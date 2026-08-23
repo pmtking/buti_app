@@ -23,6 +23,7 @@ import {
   KeyboardAvoidingView,
   Alert,
   StatusBar,
+  Image as RNImage,
 } from 'react-native';
 
 import {
@@ -57,11 +58,38 @@ import {
   RefreshCw,
   Image as ImageIcon,
   ShieldCheck,
+  Stethoscope,
+  Star,
+  CalendarCheck,
+  Sparkle,
+  Clock,
 } from 'lucide-react-native';
 
 // ✅ ایمپورت سرویس API
-import { sendThreeDRequest, ThreeDResponse } from '../../services/api';
-import ThreeDViewer from '../../components/ThreeDViewer';
+import { useRouter } from 'expo-router';
+import { sendThreeDRequest, ThreeDResponse, Recommendation, sendManualEditRequest } from '../../services/api';
+
+/* =========================================================
+   HELPERS
+========================================================= */
+
+/** 12150000 → «۱۲.۲ میلیون تومان» */
+function formatToman(n: number): string {
+  if (n >= 1_000_000) {
+    const v = n / 1_000_000;
+    return `${v.toFixed(1).replace(/\.0$/, '')} میلیون تومان`;
+  }
+  return `${n.toLocaleString('fa-IR')} تومان`;
+}
+
+const AREA_FA: Record<string, string> = {
+  lip: 'لب',
+  nose: 'بینی',
+  jaw: 'فک و چانه',
+  cheek: 'گونه',
+  eye: 'اطراف چشم',
+  forehead: 'پیشانی',
+};
 
 const { width, height } = Dimensions.get('window');
 
@@ -100,7 +128,26 @@ type AIMessage = {
   id: string;
   type: 'user' | 'ai';
   text: string;
+  time?: string; // ⏰ ساعت ارسال (مثل ۲۳:۴۵)
 };
+
+/** ⏰ زمان فعلی به فرمت فارسی HH:MM */
+function nowFa(): string {
+  const d = new Date();
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+/* ═══════════════════════════════════════════════════
+   💬 QUICK REPLIES — پاسخ‌های سریع زیر اینپوت
+   کاربر بدون تایپ، یک ضربه تا درخواست
+═══════════════════════════════════════════════════ */
+const QUICK_REPLIES = [
+  { emoji: '👄', label: 'لب پرتر', prompt: 'لب‌هام رو پرتر و خوش‌فرم کن' },
+  { emoji: '⌁', label: 'بینی قلمی', prompt: 'دماغم رو قلمی کن' },
+  { emoji: '🌸', label: 'گونه برجسته', prompt: 'گونه‌هام رو برجسته‌تر کن' },
+  { emoji: '◇', label: 'فک تیز', prompt: 'خط فکمو تیزتر کن' },
+  { emoji: '✨', label: 'بهبود طبیعی', prompt: 'یه بهبود کلی طبیعی روی چهره اعمال کن' },
+];
 
 type CameraMode = 'live' | 'photo';
 
@@ -257,6 +304,8 @@ const AI_SUGGESTIONS: Suggestion[] = [
 ========================================================= */
 
 export default function AiScreen() {
+  const router = useRouter();
+
   /* =======================================================
      CAMERA
   ======================================================= */
@@ -300,6 +349,35 @@ export default function AiScreen() {
   const [messages, setMessages] = useState<AIMessage[]>([]);
   const [activeSuggestion, setActiveSuggestion] = useState<string | null>(null);
 
+  /* ═══ 💬 CHAT UX — اسکرول خودکار + انیمیشن تایپینگ ═══ */
+  const chatScrollRef = useRef<ScrollView | null>(null);
+  const typingDots = useRef(new Animated.Value(0)).current;
+
+  /** هر پیام جدید یا حالت تایپینگ → نرم به آخر چت اسکرول کن */
+  useEffect(() => {
+    // کمی صفر تا رندر پیام کامل شود، بعد اسکرول
+    const t = setTimeout(() => {
+      chatScrollRef.current?.scrollToEnd({ animated: true });
+    }, 120);
+    return () => clearTimeout(t);
+  }, [messages, isAIProcessing]);
+
+  /** سه‌نقطه «در حال نوشتن…» با موج نرم */
+  useEffect(() => {
+    if (!isAIProcessing) {
+      typingDots.stopAnimation();
+      typingDots.setValue(0);
+      return;
+    }
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(typingDots, { toValue: 1, duration: 900, useNativeDriver: true }),
+        Animated.timing(typingDots, { toValue: 0, duration: 900, useNativeDriver: true }),
+      ])
+    ).start();
+    return () => typingDots.stopAnimation();
+  }, [isAIProcessing, typingDots]);
+
   /* =======================================================
      BEAUTY
   ======================================================= */
@@ -330,9 +408,86 @@ export default function AiScreen() {
      ✅ STATE برای API
   ======================================================= */
 
-  const [threeDData, setThreeDData] = useState<ThreeDResponse['three_d'] | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [apiResponse, setApiResponse] = useState<ThreeDResponse | null>(null);
+  const [recommendation, setRecommendation] = useState<Recommendation | null>(null);
+  /** 🆕 base64 of the 2D filtered photo (Snapchat-style result) */
+  const [filteredImage, setFilteredImage] = useState<string | null>(null);
+  /** 🆕 base64 عکس اصلی کوچک‌شده از سرور — برای دکمه قبل/بعد */
+  const [originalImage, setOriginalImage] = useState<string | null>(null);
+  /** 🆕 پیش‌نمایش سه‌بعدی (وقتی عکس نیم‌رخ باشد) */
+  const [threeDPreview, setThreeDPreview] = useState<string | null>(null);
+
+  /* ═══ MANUAL EDIT — اسلایدرهای حجم نواحی ═══ */
+  const EDIT_AREAS = [
+    { key: 'lip', label: 'لب', emoji: '👄' },
+    { key: 'cheek', label: 'گونه', emoji: '🌸' },
+    { key: 'nose', label: 'بینی', emoji: '⌁' },
+    { key: 'jaw', label: 'فک', emoji: '◇' },
+    { key: 'eye', label: 'چشم', emoji: '◉' },
+    { key: 'forehead', label: 'پیشانی', emoji: '◯' },
+  ] as const;
+
+  const [showEditPanel, setShowEditPanel] = useState(false);
+  const [manualEdits, setManualEdits] = useState<Record<string, number>>({});
+  const [isEditing, setIsEditing] = useState(false);
+  const [editBase, setEditBase] = useState<string | null>(null); // عکس پایه برای ادیت
+
+  const changeEdit = (key: string, delta: number) => {
+    setManualEdits((prev) => {
+      const next = Math.max(-100, Math.min(100, (prev[key] ?? 0) + delta));
+      return { ...prev, [key]: next };
+    });
+  };
+
+  const resetEdits = () => {
+    setManualEdits({});
+    if (editBase) setFilteredImage(editBase);
+  };
+
+  const applyManualEdits = async () => {
+    const active = Object.fromEntries(
+      Object.entries(manualEdits).filter(([, v]) => Math.abs(v) >= 1)
+    );
+    if (!Object.keys(active).length || !capturedImage) return;
+
+    setIsEditing(true);
+    try {
+      // عکس پایه: آخرین نتیجه یا عکس اصلی
+      let baseB64: string;
+      if (editBase) {
+        baseB64 = editBase;
+      } else {
+        const resp = await fetch(capturedImage);
+        const blob = await resp.blob();
+        baseB64 = await new Promise<string>((resolve) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result).split(',')[1]);
+          reader.readAsDataURL(blob);
+        });
+        setEditBase(baseB64);
+      }
+
+      const result = await sendManualEditRequest(baseB64, active);
+      if (result.status === 'success') {
+        setFilteredImage(result.image);
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: Date.now().toString(),
+            type: 'ai',
+            text: `🎛️ ادیت دستی اعمال شد: ${Object.entries(result.labels)
+              .map(([k, v]) => `${v} ${result.applied[k] > 0 ? '+' : ''}${result.applied[k]}`)
+              .join('، ')}`,
+          },
+        ]);
+      }
+    } catch (e: any) {
+      Alert.alert('خطا', e.message || 'ادیت ناموفق بود');
+    } finally {
+      setIsEditing(false);
+    }
+  };
 
   /* =======================================================
      ANIMATIONS
@@ -400,7 +555,8 @@ export default function AiScreen() {
         {
           id: 'analysis',
           type: 'ai',
-          text: 'تحلیل اولیه چهره انجام شد. حالا می‌توانی تغییر موردنظرت را برای Beauty AI توضیح بدهی.',
+          text: 'سلام! 🌸 من بوتی‌ام — مشاور زیبایی تو.\nچهره‌ات رو تحلیل کردم و آماده‌ام هر تغییری رو قبل از تصمیم واقعی روی صورتت شبیه‌سازی کنم.\nبگو چی تو ذهنته؟',
+          time: nowFa(),
         },
       ]);
     }, 3400);
@@ -500,17 +656,47 @@ export default function AiScreen() {
       const result = await sendThreeDRequest(base64, text, 0.7);
 
       if (result.status === 'success') {
-        setThreeDData(result.three_d);
         setApiResponse(result);
+        setRecommendation(result.recommendation ?? null);
+        // ✅ نتیجه ادیت + عکس اصلی کوچک‌شده برای دکمه قبل/بعد
+        setFilteredImage(result.filtered_image ?? result.image ?? null);
+        setOriginalImage(result.original_image ?? null);
+        setShowBefore(false); // همیشه اول «بعد» را نشان بده
         setAnalysisDone(true);
 
+        let msg = `✅ ${result.description}`;
+        // 🆕 گزارش تغییرات چندگانه
+        const applied = (result as any).applied_changes as any[] | undefined;
+        if (applied && applied.length > 1) {
+          const names: Record<string, string> = {
+            upturned_tip: 'نوک بالا', hump_reduction: 'برداشتن قوز',
+            narrower: 'باریک‌سازی', fleshy: 'گوشتی', doll_tip: 'عروسکی',
+            fantasy: 'فانتزی', filler: 'فیلر', russian: 'روسی',
+            fuller: 'حجم‌دهی', sharper: 'تیزکردن',
+          };
+          msg += `\n🎛️ ${applied.length} تغییر اعمال شد: ${applied
+            .map((c) => names[c.action] ?? c.action)
+            .join(' + ')}`;
+        }
+        // 🆕 اگر عکس نیم‌رخ بود، پیش‌نمایش سه‌بعدی ساخته شده
+        const preview = (result as any).three_d_preview as string | null | undefined;
+        if (preview) {
+          setThreeDPreview(preview);
+          msg += '\n🧊 پیش‌نمایش سه‌بعدی از نیم‌رخ ساخته شد';
+        }
+        if (!result.filtered_image) {
+          msg += '\n\n⚠️ تغییر بصری اعمال نشد — لطفاً درخواست را دقیق‌تر بنویس (مثلاً: لب روسی، بینی گوشتی، نوک بالا)';
+        }
+        const rec = result.recommendation;
+        if (rec?.estimated_price) {
+          msg += `\n\n💰 برآورد هزینه: ${formatToman(rec.estimated_price.min)} تا ${formatToman(rec.estimated_price.max)}`;
+        }
+        if (rec?.doctor) {
+          msg += `\n👨‍⚕️ ${rec.doctor.name} آماده مشاوره است`;
+        }
         setMessages((prev) => [
           ...prev,
-          {
-            id: Date.now().toString(),
-            type: 'ai',
-            text: `✅ ${result.description}\n\n📊 تغییرات:\n• ناحیه: ${result.changes.area}\n• عمل: ${result.changes.action}\n• شدت: ${Math.round(result.changes.intensity * 100)}%`,
-          },
+          { id: Date.now().toString(), type: 'ai', text: msg, time: nowFa() },
         ]);
       } else {
         Alert.alert('خطا', 'پردازش با مشکل مواجه شد');
@@ -523,6 +709,7 @@ export default function AiScreen() {
           id: Date.now().toString(),
           type: 'ai',
           text: `❌ خطا: ${error.message}`,
+          time: nowFa(),
         },
       ]);
     } finally {
@@ -558,7 +745,6 @@ export default function AiScreen() {
         setIsScanning(true);
         setAnalysisDone(false);
         setMessages([]);
-        setThreeDData(null);
 
         const defaultText = prompt.trim() || 'تحلیل و بهبود چهره';
         await handleSendToBackend(uri, defaultText);
@@ -587,7 +773,6 @@ export default function AiScreen() {
         setIsScanning(true);
         setAnalysisDone(false);
         setMessages([]);
-        setThreeDData(null);
 
         const defaultText = prompt.trim() || 'تحلیل و بهبود چهره';
         await handleSendToBackend(photo.uri, defaultText);
@@ -626,8 +811,14 @@ export default function AiScreen() {
     setActiveSuggestion(null);
     setSimulation({ active: false, intensity: 0.5 });
     setFaceDetected(false);
-    setThreeDData(null);
     setApiResponse(null);
+    setRecommendation(null);
+    setFilteredImage(null);
+    setOriginalImage(null);
+    setThreeDPreview(null);
+    setManualEdits({});
+    setEditBase(null);
+    setShowEditPanel(false);
 
     setTimeout(() => {
       setFaceDetected(true);
@@ -708,6 +899,7 @@ export default function AiScreen() {
         id: Date.now().toString(),
         type: 'user',
         text: cleanPrompt,
+        time: nowFa(),
       },
     ]);
 
@@ -723,7 +915,8 @@ export default function AiScreen() {
         {
           id: Date.now().toString(),
           type: 'ai',
-          text: 'متوجه شدم. لطفاً ابتدا یک تصویر آپلود کنید تا بتوانم تغییرات را شبیه‌سازی کنم.',
+          text: 'فهمیدم چی می‌خوای! 🌸\nفقط یه عکس ازت لازم دارم — از دوربین بگیر یا از گالری انتخاب کن تا روی صورت خودت شبیه‌سازی کنم.',
+          time: nowFa(),
         },
       ]);
     }
@@ -750,7 +943,8 @@ export default function AiScreen() {
       {
         id: Date.now().toString(),
         type: 'ai',
-        text: 'شبیه‌سازی بصری اعمال شد. این نتیجه صرفاً برای مشاهده تقریبی تغییرات است.',
+        text: 'شبیه‌سازی اعمال شد ✨\nاین نتیجه تقریبی برای دیدن حس تغییره — نظر پزشک پس از معاینه ملاک نهایی است.',
+        time: nowFa(),
       },
     ]);
   };
@@ -890,7 +1084,14 @@ export default function AiScreen() {
         <SafeAreaView style={styles.safeArea}>
           {/* HEADER */}
           <View style={styles.analysisHeader}>
-            <TouchableOpacity style={styles.headerIconButton} onPress={resetAll} activeOpacity={0.7}>
+            <TouchableOpacity
+              style={styles.headerIconButton}
+              onPress={() => {
+                resetAll();
+                router.back();
+              }}
+              activeOpacity={0.7}
+            >
               <View style={styles.headerIconChip}>
                 <ArrowLeft size={15} color="#E7C6D8" strokeWidth={2} />
               </View>
@@ -920,15 +1121,26 @@ export default function AiScreen() {
                 style={styles.stageBorder}
               />
               <View style={styles.stageInner}>
-                {capturedImage ? (
-                  <ThreeDViewer
-                    vertices={threeDData?.vertices}
-                    faces={threeDData?.faces}
-                    textureBase64={
-                      showBefore ? capturedImage : threeDData?.texture || capturedImage
-                    }
-                    isLoading={isLoading || isScanning}
-                    autoRotate={analysisDone && !showBefore}
+                {(filteredImage ?? originalImage) ? (
+                  /* ✅ BEFORE/AFTER: «اصلی» = عکس خام، «نتیجه» = ادیت‌شده */
+                  <RNImage
+                    source={{
+                      uri:
+                        showBefore
+                          ? (originalImage
+                              ? `data:image/jpeg;base64,${originalImage}`
+                              : (capturedImage ?? ''))
+                          : `data:image/jpeg;base64,${filteredImage ?? originalImage}`,
+                    }}
+                    style={styles.filteredPhoto}
+                    resizeMode="cover"
+                  />
+                ) : capturedImage ? (
+                  /* scan-only state: show the original photo while waiting */
+                  <RNImage
+                    source={{ uri: capturedImage }}
+                    style={styles.filteredPhoto}
+                    resizeMode="cover"
                   />
                 ) : (
                   <View style={styles.emptyFace}>
@@ -1003,11 +1215,25 @@ export default function AiScreen() {
             <TouchableOpacity
               style={[styles.smallAction, showBefore && styles.smallActionActive]}
               onPress={() => setShowBefore(!showBefore)}
+              onPressIn={() => setShowBefore(true)}          // ✅ نگه‌دار = قبل
+              onPressOut={() => setShowBefore(false)}        // ✅ رها کن = بعد
+              onLongPress={() => setShowBefore(true)}
               activeOpacity={0.75}
+              disabled={!(filteredImage ?? originalImage)}
             >
               <Eye size={13} color={showBefore ? '#E7BCD4' : '#B9B9C0'} />
               <Text style={[styles.smallActionText, showBefore && styles.smallActionTextActive]}>
-                {showBefore ? 'نتیجه' : 'اصلی'}
+                {showBefore ? 'قبل از ادیت' : 'بعد از ادیت'}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.smallAction, showEditPanel && styles.smallActionActive]}
+              onPress={() => setShowEditPanel(!showEditPanel)}
+              activeOpacity={0.75}
+            >
+              <SlidersHorizontal size={13} color={showEditPanel ? '#E7BCD4' : '#B9B9C0'} />
+              <Text style={[styles.smallActionText, showEditPanel && styles.smallActionTextActive]}>
+                ادیت دستی
               </Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.smallAction} onPress={handlePickImage} activeOpacity={0.75}>
@@ -1020,285 +1246,315 @@ export default function AiScreen() {
             </TouchableOpacity>
           </View>
 
-          {!isScanning && (
-            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
-              {/* AI CHAT HEADER */}
-              <View style={styles.aiChatHeader}>
-                <View style={styles.aiChatIcon}>
-                  <Brain size={17} color="#E3B1C9" />
-                </View>
-                <View style={styles.aiChatTitleArea}>
-                  <Text style={styles.aiChatTitle}>Beauty AI</Text>
-                  <Text style={styles.aiChatSubtitle}>توضیح بده چه تغییری می‌خواهی</Text>
-                </View>
-                <View style={styles.aiOnlineBadge}>
-                  <View style={styles.onlineDot} />
-                  <Text style={styles.onlineText}>ONLINE</Text>
-                </View>
+          {/* ═══ MANUAL EDIT PANEL ═══ */}
+          {showEditPanel && capturedImage && (
+            <View style={styles.editPanel}>
+              <View style={styles.editPanelHead}>
+                <Text style={styles.editPanelTitle}>ادیت دستی</Text>
+                <TouchableOpacity onPress={resetEdits}>
+                  <RotateCcw size={13} color="#9999A0" />
+                </TouchableOpacity>
               </View>
 
-              {/* SUGGESTIONS */}
-              {showSuggestions && (
-                <View style={styles.suggestionsSection}>
-                  <View style={styles.suggestionsHeader}>
-                    <View>
-                      <Text style={styles.suggestionsTitle}>پیشنهادهای سریع</Text>
-                      <Text style={styles.suggestionsSubtitle}>برای شروع یکی را انتخاب کن</Text>
-                    </View>
-                    <TouchableOpacity onPress={() => setShowSuggestions(false)}>
-                      <ChevronDown size={17} color="#777780" />
-                    </TouchableOpacity>
-                  </View>
-                  <ScrollView
-                    horizontal
-                    inverted
-                    showsHorizontalScrollIndicator={false}
-                    contentContainerStyle={styles.suggestionScroll}
-                  >
-                    {AI_SUGGESTIONS.map((suggestion) => {
-                      const active = activeSuggestion === suggestion.id;
-                      return (
-                        <TouchableOpacity
-                          key={suggestion.id}
-                          activeOpacity={0.85}
-                          onPress={() => selectSuggestion(suggestion)}
-                          style={[styles.suggestionCard, active && styles.suggestionCardActive]}
-                        >
-                          <View style={styles.suggestionIcon}>
-                            <Text style={styles.suggestionEmoji}>{suggestion.icon}</Text>
-                          </View>
-                          <Text style={styles.suggestionTitle}>{suggestion.title}</Text>
-                          <Text style={styles.suggestionDescription} numberOfLines={2}>
-                            {suggestion.description}
-                          </Text>
-                          {suggestion.gel !== undefined && (
-                            <View style={styles.gelBadge}>
-                              <Text style={styles.gelBadgeText}>{suggestion.gel} cc</Text>
-                            </View>
-                          )}
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </ScrollView>
-                </View>
-              )}
-
-              {/* MESSAGES */}
-              {messages.length > 0 && (
-                <View style={styles.messagesContainer}>
-                  {messages.slice(-4).map((message) => (
-                    <View
-                      key={message.id}
-                      style={[
-                        styles.messageBubble,
-                        message.type === 'user' ? styles.userMessage : styles.aiMessage,
-                      ]}
-                    >
-                      {message.type === 'ai' && <Sparkles size={12} color="#D99AB9" />}
-                      <Text style={styles.messageText}>{message.text}</Text>
-                    </View>
-                  ))}
-                </View>
-              )}
-
-              {/* PROMPT */}
-              <View style={styles.promptContainer}>
-                <View style={styles.promptHeader}>
-                  <View style={styles.promptLabelRow}>
-                    <MessageCircle size={13} color="#D99AB9" />
-                    <Text style={styles.promptLabel}>توضیح تغییر موردنظر</Text>
-                  </View>
-                  <Text style={styles.promptHint}>AI understands Persian</Text>
-                </View>
-                <View style={styles.promptInputWrapper}>
-                  <TextInput
-                    value={prompt}
-                    onChangeText={setPrompt}
-                    placeholder="مثلاً لب‌ها کمی پرتر و خوش‌فرم‌تر شوند..."
-                    placeholderTextColor="#595960"
-                    multiline
-                    textAlign="right"
-                    textAlignVertical="top"
-                    style={styles.promptInput}
-                  />
-                  <TouchableOpacity
-                    style={[styles.sendButton, !prompt.trim() && styles.sendButtonDisabled]}
-                    disabled={!prompt.trim() || isAIProcessing}
-                    onPress={handleSendPrompt}
-                  >
-                    {isAIProcessing ? (
-                      <ActivityIndicator size="small" color="#FFFFFF" />
-                    ) : (
-                      <Send size={16} color="#FFFFFF" />
-                    )}
-                  </TouchableOpacity>
-                </View>
-                <Text style={styles.promptDisclaimer}>
-                  این بخش برای شبیه‌سازی بصری است و جایگزین تشخیص یا توصیه پزشک نیست.
-                </Text>
-              </View>
-
-              {/* SIMULATION */}
-              <View style={styles.simulationPanel}>
-                <View style={styles.simulationHeader}>
-                  <View style={styles.simulationTitleRow}>
-                    <Rotate3D size={15} color="#D99AB9" />
-                    <Text style={styles.simulationTitle}>Simulation Parameters</Text>
-                  </View>
-                  <TouchableOpacity
-                    style={[styles.simulationToggle, simulationMode && styles.simulationToggleActive]}
-                    onPress={() => setSimulationMode(!simulationMode)}
-                  >
-                    <View
-                      style={[styles.simulationToggleDot, simulationMode && styles.simulationToggleDotActive]}
-                    />
-                  </TouchableOpacity>
-                </View>
-                <View style={styles.simulationInfo}>
-                  <Text style={styles.simulationPart}>ناحیه:</Text>
-                  <Text style={styles.simulationPartValue}>{selectedPartInfo?.title}</Text>
-                </View>
-                {selectedPart === 'lips' && (
-                  <View style={styles.gelControl}>
-                    <View>
-                      <Text style={styles.gelTitle}>حجم شبیه‌سازی</Text>
-                      <Text style={styles.gelSubtitle}>فقط پارامتر بصری</Text>
-                    </View>
-                    <View style={styles.gelStepper}>
+              {EDIT_AREAS.map((area) => {
+                const val = manualEdits[area.key] ?? 0;
+                return (
+                  <View key={area.key} style={styles.editRow}>
+                    <Text style={styles.editLabel}>
+                      {area.emoji} {area.label}
+                    </Text>
+                    {/* stepper: − / value / + */}
+                    <View style={styles.stepper}>
                       <TouchableOpacity
-                        style={styles.gelButton}
-                        onPress={() => setGelAmount(Math.max(0, gelAmount - 0.5))}
+                        style={styles.stepBtn}
+                        onPress={() => changeEdit(area.key, -10)}
+                        activeOpacity={0.6}
                       >
-                        <Minus size={13} color="#FFFFFF" />
+                        <Minus size={12} color="#FFF" />
                       </TouchableOpacity>
-                      <View style={styles.gelValue}>
-                        <Text style={styles.gelNumber}>{gelAmount.toFixed(1)}</Text>
-                        <Text style={styles.gelUnit}>cc</Text>
+                      <View style={styles.trackWrap}>
+                        {/* track */}
+                        <View style={styles.track} pointerEvents="none" />
+                        {/* center notch */}
+                        <View style={styles.notch} pointerEvents="none" />
+                        {/* fill from center */}
+                        <View
+                          style={[
+                            styles.fill,
+                            val >= 0 ? styles.fillRight : styles.fillLeft,
+                            { width: `${Math.abs(val) / 2}%` },
+                          ]}
+                          pointerEvents="none"
+                        />
                       </View>
                       <TouchableOpacity
-                        style={styles.gelButton}
-                        onPress={() => setGelAmount(Math.min(5, gelAmount + 0.5))}
+                        style={styles.stepBtn}
+                        onPress={() => changeEdit(area.key, 10)}
+                        activeOpacity={0.6}
                       >
-                        <Plus size={13} color="#FFFFFF" />
+                        <Plus size={12} color="#FFF" />
                       </TouchableOpacity>
                     </View>
+                    <Text
+                      style={[
+                        styles.editVal,
+                        val > 0 && styles.editValPos,
+                        val < 0 && styles.editValNeg,
+                      ]}
+                    >
+                      {val > 0 ? `+${val}` : val}
+                    </Text>
                   </View>
+                );
+              })}
+
+              <TouchableOpacity
+                style={[styles.applyEditBtn, isEditing && styles.sendButtonDisabled]}
+                disabled={isEditing || !Object.values(manualEdits).some((v) => Math.abs(v) >= 1)}
+                onPress={applyManualEdits}
+                activeOpacity={0.85}
+              >
+                {isEditing ? (
+                  <ActivityIndicator size="small" color="#1A1420" />
+                ) : (
+                  <>
+                    <Wand2 size={13} color="#1A1420" />
+                    <Text style={styles.applyEditText}>اعمال تغییرات</Text>
+                  </>
                 )}
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {!isScanning && (
+            <ScrollView
+              ref={chatScrollRef}
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={styles.scrollContent}
+            >
+              {/* ═══ 💬 CHAT HEADER — معرفی مشاور ═══ */}
+              <View style={styles.chatHeaderCard}>
+                <View style={styles.aiAvatarWrap}>
+                  <LinearGradient
+                    colors={['#C783A5', '#8E5B77']}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 1 }}
+                    style={styles.aiAvatarGradient}
+                  >
+                    <Sparkles size={16} color="#FFFFFF" />
+                  </LinearGradient>
+                  <View style={styles.aiOnlineDot} />
+                </View>
+                <View style={styles.chatHeaderTextWrap}>
+                  <Text style={styles.chatHeaderName}>بوتی‌ام</Text>
+                  <Text style={styles.chatHeaderStatus}>
+                    {isAIProcessing ? 'در حال پردازش…' : 'مشاور زیبایی • آنلاین'}
+                  </Text>
+                </View>
+                <Clock size={12} color="#55555C" />
               </View>
 
-              {/* FACE AREAS */}
-              <View style={styles.partSection}>
-                <View style={styles.partHeader}>
-                  <View>
-                    <Text style={styles.partHeaderTitle}>Face Areas</Text>
-                    <Text style={styles.partHeaderSubtitle}>Select an area to customize</Text>
-                  </View>
-                  <TouchableOpacity style={styles.filterButton} onPress={() => setShowTools(!showTools)}>
-                    <SlidersHorizontal size={15} color="#D99AB9" />
-                  </TouchableOpacity>
-                </View>
+              {/* ═══ SUGGESTIONS — compact chips, single row ═══ */}
+              {showSuggestions && (
                 <ScrollView
                   horizontal
-                  inverted
                   showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={styles.partScroll}
+                  contentContainerStyle={styles.suggestionScroll}
                 >
-                  {PARTS.map((part) => {
-                    const active = selectedPart === part.id;
+                  {AI_SUGGESTIONS.map((s) => {
+                    const active = activeSuggestion === s.id;
                     return (
                       <TouchableOpacity
-                        key={part.id}
-                        style={[styles.partCard, active && styles.partCardActive]}
-                        onPress={() => selectPart(part.id)}
+                        key={s.id}
+                        activeOpacity={0.8}
+                        onPress={() => selectSuggestion(s)}
+                        style={[styles.chip, active && styles.chipActive]}
                       >
-                        <Text style={[styles.partIcon, active && styles.partIconActive]}>{part.icon}</Text>
-                        <Text style={[styles.partName, active && styles.partNameActive]}>{part.title}</Text>
-                        <Text style={styles.partEnglish}>{part.subtitle}</Text>
-                        {active && (
-                          <View style={styles.activeMark}>
-                            <Check size={8} color="#FFFFFF" />
-                          </View>
-                        )}
+                        <Text style={styles.chipEmoji}>{s.icon}</Text>
+                        <Text style={[styles.chipText, active && styles.chipTextActive]}>
+                          {s.title}
+                        </Text>
                       </TouchableOpacity>
                     );
                   })}
                 </ScrollView>
-              </View>
+              )}
 
-              {/* CONTROLS */}
-              {showTools && (
-                <View style={styles.controls}>
-                  <View style={styles.controlsHeader}>
-                    <TouchableOpacity onPress={resetSelectedPart}>
-                      <RotateCcw size={14} color="#9999A0" />
-                    </TouchableOpacity>
-                    <View>
-                      <Text style={styles.controlsTitle}>{selectedPartInfo?.title}</Text>
-                      <Text style={styles.controlsSub}>{selectedPartInfo?.subtitle}</Text>
+              {/* ═══ MESSAGES — full history, avatar + timestamp ═══ */}
+              {messages.length > 0 && (
+                <View style={styles.messagesContainer}>
+                  {messages.map((message) => (
+                    <View
+                      key={message.id}
+                      style={[
+                        styles.messageRow,
+                        message.type === 'user' ? styles.userRow : styles.aiRow,
+                      ]}
+                    >
+                      {message.type === 'ai' && (
+                        <View style={styles.msgAiAvatar}>
+                          <Sparkle size={10} color="#F0CFE0" />
+                        </View>
+                      )}
+                      <View
+                        style={[
+                          styles.messageBubble,
+                          message.type === 'user' ? styles.userMessage : styles.aiMessage,
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.messageText,
+                            message.type === 'user'
+                              ? styles.userMessageText
+                              : styles.aiMessageText,
+                          ]}
+                        >
+                          {message.text}
+                        </Text>
+                        <Text style={styles.messageTime}>{message.time ?? ''}</Text>
+                      </View>
                     </View>
-                  </View>
-                  <BeautyControl
-                    title="Width"
-                    value={settings[selectedPart].width}
-                    onMinus={() => changeSetting('width', -0.05)}
-                    onPlus={() => changeSetting('width', 0.05)}
-                  />
-                  <BeautyControl
-                    title="Height"
-                    value={settings[selectedPart].height}
-                    onMinus={() => changeSetting('height', -0.05)}
-                    onPlus={() => changeSetting('height', 0.05)}
-                  />
-                  <BeautyControl
-                    title="Projection"
-                    value={settings[selectedPart].projection}
-                    onMinus={() => changeSetting('projection', -0.05)}
-                    onPlus={() => changeSetting('projection', 0.05)}
-                  />
-                  <BeautyControl
-                    title="Rotation"
-                    value={settings[selectedPart].rotation}
-                    onMinus={() => changeSetting('rotation', -0.05)}
-                    onPlus={() => changeSetting('rotation', 0.05)}
-                  />
+                  ))}
+
+                  {/* ⌨️ TYPING INDICATOR — سه‌نقطه موج‌دار */}
+                  {isAIProcessing && (
+                    <View style={styles.aiRow}>
+                      <View style={styles.msgAiAvatar}>
+                        <Sparkle size={10} color="#F0CFE0" />
+                      </View>
+                      <View style={[styles.messageBubble, styles.aiMessage]}>
+                        <View style={styles.typingRow}>
+                          {[0, 1, 2].map((i) => (
+                            <Animated.View
+                              key={i}
+                              style={[
+                                styles.typingDot,
+                                {
+                                  opacity: typingDots.interpolate({
+                                    inputRange: [0, 1],
+                                    outputRange: [0.25, 1],
+                                  }),
+                                  transform: [
+                                    {
+                                      translateY: typingDots.interpolate({
+                                        inputRange: [0, 1],
+                                        outputRange: [0, -3 * Math.sin((Math.PI * i) / 2)],
+                                      }),
+                                    },
+                                  ],
+                                },
+                              ]}
+                            />
+                          ))}
+                        </View>
+                      </View>
+                    </View>
+                  )}
                 </View>
               )}
 
-              {/* AI PROCESSING */}
-              {isAIProcessing && (
-                <View style={styles.aiProcessing}>
-                  <Animated.View style={{ transform: [{ scale: aiPulse }] }}>
-                    <Sparkles size={18} color="#D99AB9" />
-                  </Animated.View>
-                  <View>
-                    <Text style={styles.processingTitle}>Beauty AI در حال پردازش...</Text>
-                    <Text style={styles.processingSubtitle}>
-                      در حال تبدیل توضیحات شما به پارامترهای شبیه‌سازی
-                    </Text>
-                  </View>
-                </View>
-              )}
+              {/* ═══ 💬 QUICK REPLIES — یک ضربه تا درخواست ═══ */}
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.quickReplyScroll}
+              >
+                {QUICK_REPLIES.map((q) => (
+                  <TouchableOpacity
+                    key={q.label}
+                    style={styles.quickReplyChip}
+                    activeOpacity={0.75}
+                    onPress={() => {
+                      setPrompt(q.prompt);
+                    }}
+                  >
+                    <Text style={styles.quickReplyEmoji}>{q.emoji}</Text>
+                    <Text style={styles.quickReplyLabel}>{q.label}</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
 
-              {/* SAFETY */}
-              <View style={styles.safetyCard}>
-                <ShieldCheck size={17} color="#82D4AD" />
-                <View style={styles.safetyContent}>
-                  <Text style={styles.safetyTitle}>Visual Simulation Only</Text>
-                  <Text style={styles.safetyText}>
-                    نتیجه نمایش‌داده‌شده یک شبیه‌سازی بصری است و نتیجه واقعی درمان را تضمین نمی‌کند.
-                  </Text>
-                </View>
+              {/* ═══ PROMPT — floating composer ═══ */}
+              <View style={styles.promptContainer}>
+                <TextInput
+                  value={prompt}
+                  onChangeText={setPrompt}
+                  placeholder="مثلاً: لب‌هام رو پرتر کن…"
+                  placeholderTextColor="#5A5A63"
+                  multiline
+                  textAlign="right"
+                  textAlignVertical="top"
+                  style={styles.promptInput}
+                  onSubmitEditing={handleSendPrompt}
+                />
+                <TouchableOpacity
+                  style={[styles.sendButton, (!prompt.trim() || isAIProcessing) && styles.sendButtonDisabled]}
+                  disabled={!prompt.trim() || isAIProcessing}
+                  onPress={handleSendPrompt}
+                  activeOpacity={0.85}
+                >
+                  {isAIProcessing ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                  ) : (
+                    <Send size={15} color="#FFFFFF" />
+                  )}
+                </TouchableOpacity>
               </View>
 
-              {/* BOTTOM ACTIONS */}
+              {/* ═══ AI PROCESSING — slim inline indicator ═══ */}
+              {isAIProcessing && (
+                <View style={styles.aiProcessingRow}>
+                  <ActivityIndicator size="small" color="#D99AB9" />
+                  <Text style={styles.aiProcessingText}>Beauty AI در حال پردازش…</Text>
+                </View>
+              )}
+
+              {/* ═══ DOCTOR RECOMMENDATION — conversion card ═══ */}
+              {recommendation?.doctor && (
+                <DoctorCard
+                  recommendation={recommendation}
+                  areaFa={recommendation.service ? AREA_FA[recommendation.service.area] ?? recommendation.service.area : undefined}
+                  onPressCta={() => {
+                    const d = recommendation.doctor!;
+                    setMessages((prev) => [
+                      ...prev,
+                      {
+                        id: Date.now().toString(),
+                        type: 'user',
+                        text: 'می‌خوام مشاوره رایگان رزرو کنم',
+                      },
+                      {
+                        id: (Date.now() + 1).toString(),
+                        type: 'ai',
+                        text: `عالیه! درخواست مشاوره شما با ${d.name} ثبت شد ✅\nکلینیک: ${d.clinic}\nبه‌زودی با شما تماس می‌گیریم تا زمان مشاوره حضوری رو هماهنگ کنیم. 🌸`,
+                      },
+                    ]);
+                  }}
+                />
+              )}
+
+              {/* ═══ SAFETY — minimal footer note ═══ */}
+              <View style={styles.safetyNote}>
+                <ShieldCheck size={12} color="#5E7A6C" />
+                <Text style={styles.safetyNoteText}>
+                  شبیه‌سازی بصری است و جایگزین نظر پزشک نمی‌شود
+                </Text>
+              </View>
+
+              {/* ═══ BOTTOM ACTIONS ═══ */}
               <View style={styles.bottomActions}>
                 <TouchableOpacity style={styles.resetAllButton} onPress={resetAll}>
-                  <Layers size={15} color="#BFC0C6" />
+                  <Layers size={14} color="#BFC0C6" />
                   <Text style={styles.resetAllText}>تصویر جدید</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={styles.simulateButton} activeOpacity={0.9} onPress={applySimulation}>
+                <TouchableOpacity
+                  style={[styles.simulateButton, filteredImage && styles.simulateButtonHidden]}
+                  activeOpacity={0.9}
+                  onPress={applySimulation}
+                >
                   <LinearGradient colors={['#C783A5', '#966581']} style={styles.simulateGradient}>
-                    <Wand2 size={16} color="#FFFFFF" />
+                    <Wand2 size={15} color="#FFFFFF" />
                     <Text style={styles.simulateText}>اعمال شبیه‌سازی</Text>
                   </LinearGradient>
                 </TouchableOpacity>
@@ -1308,6 +1564,92 @@ export default function AiScreen() {
         </SafeAreaView>
       </View>
     </KeyboardAvoidingView>
+  );
+}
+
+/* =========================================================
+   DOCTOR CARD — پیشنهاد پزشک + برآورد هزینه + CTA رزرو
+========================================================= */
+
+function DoctorCard({
+  recommendation,
+  areaFa,
+  onPressCta,
+}: {
+  recommendation: Recommendation;
+  areaFa?: string;
+  onPressCta: () => void;
+}) {
+  const { doctor, service, estimated_price, gel_cc } = recommendation;
+  if (!doctor) return null;
+
+  return (
+    <View style={styles.docCard}>
+      {/* header */}
+      <View style={styles.docHeader}>
+        <View style={styles.docBadge}>
+          <Stethoscope size={13} color="#E7BCD4" />
+          <Text style={styles.docBadgeText}>پیشنهاد متخصص</Text>
+        </View>
+        {areaFa && <Text style={styles.docArea}>{areaFa}</Text>}
+      </View>
+
+      {/* doctor row */}
+      <View style={styles.docRow}>
+        <View style={styles.docAvatar}>
+          <Text style={styles.docAvatarText}>{doctor.name.replace('دکتر ', 'د.').slice(0, 2)}</Text>
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.docName}>{doctor.name}</Text>
+          <Text style={styles.docSpec}>{doctor.specialty}</Text>
+          <View style={styles.docMetaRow}>
+            <Star size={10} color="#F5C518" fill="#F5C518" />
+            <Text style={styles.docRating}>{doctor.rating.toFixed(1)}</Text>
+            <Text style={styles.docReviews}>({doctor.review_count} نظر)</Text>
+            <Text style={styles.dot}>•</Text>
+            <Text style={styles.docExp}>{doctor.experience_years} سال تجربه</Text>
+          </View>
+        </View>
+      </View>
+
+      {/* service + price */}
+      {service && (
+        <View style={styles.serviceBox}>
+          <View style={styles.serviceRow}>
+            <Sparkles size={11} color="#D99AB9" />
+            <Text style={styles.serviceTitle}>{service.title}</Text>
+          </View>
+          <View style={styles.priceRow}>
+            {gel_cc ? (
+              <Text style={styles.priceLabel}>
+                {gel_cc.toLocaleString('fa-IR')} سی‌سی — جلسه واحد
+              </Text>
+            ) : (
+              <Text style={styles.priceLabel}>
+                {service.sessions} جلسه • ~{service.duration_min} دقیقه
+              </Text>
+            )}
+            {estimated_price && (
+              <Text style={styles.priceValue}>
+                {formatToman(estimated_price.min)} تا {formatToman(estimated_price.max)}
+              </Text>
+            )}
+          </View>
+        </View>
+      )}
+
+      {/* CTA */}
+      <TouchableOpacity style={styles.ctaButton} activeOpacity={0.85} onPress={onPressCta}>
+        <LinearGradient colors={['#C783A5', '#966581']} style={styles.ctaGradient}>
+          <CalendarCheck size={15} color="#FFFFFF" />
+          <Text style={styles.ctaText}>{recommendation.cta?.text ?? 'رزرو مشاوره رایگان'}</Text>
+        </LinearGradient>
+      </TouchableOpacity>
+
+      <Text style={styles.docDisclaimer}>
+        مشاوره اولیه رایگان است؛ قیمت نهایی پس از معاینه حضوری اعلام می‌شود.
+      </Text>
+    </View>
   );
 }
 
@@ -1402,30 +1744,6 @@ function FaceMarker({ style }: { style: any }) {
 /* =========================================================
    BEAUTY CONTROL
 ========================================================= */
-
-function BeautyControl({ title, value, onMinus, onPlus }: { title: string; value: number; onMinus: () => void; onPlus: () => void }) {
-  const percentage = Math.min(100, Math.max(0, ((value - 0.5) / 1) * 100));
-
-  return (
-    <View style={styles.beautyControl}>
-      <TouchableOpacity style={styles.controlCircle} onPress={onMinus}>
-        <Text style={styles.minusText}>−</Text>
-      </TouchableOpacity>
-      <View style={styles.sliderArea}>
-        <View style={styles.sliderTrack}>
-          <View style={[styles.sliderFill, { width: `${percentage}%` }]} />
-        </View>
-      </View>
-      <TouchableOpacity style={styles.controlCircle} onPress={onPlus}>
-        <Text style={styles.plusText}>+</Text>
-      </TouchableOpacity>
-      <View style={styles.valueArea}>
-        <Text style={styles.controlName}>{title}</Text>
-        <Text style={styles.controlValue}>{value.toFixed(2)}</Text>
-      </View>
-    </View>
-  );
-}
 
 /* =========================================================
    STYLES
@@ -1608,6 +1926,7 @@ const styles = StyleSheet.create({
   },
   stageBorder: { ...StyleSheet.absoluteFillObject, borderRadius: 28 },
   stageInner: { flex: 1, borderRadius: 27, overflow: 'hidden', backgroundColor: '#101013' },
+  filteredPhoto: { ...StyleSheet.absoluteFillObject, width: '100%', height: '100%' },
   stageStatusPill: {
     position: 'absolute',
     top: 12,
@@ -1655,101 +1974,292 @@ const styles = StyleSheet.create({
   smallActionActive: { backgroundColor: 'rgba(216,137,173,0.15)', borderColor: 'rgba(216,137,173,0.35)' },
   smallActionText: { color: '#C7C7CC', fontSize: 8, fontWeight: '700' },
 
-  aiChatHeader: { marginHorizontal: 16, marginTop: 5, padding: 12, borderRadius: 18, flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(216,137,173,0.07)', borderWidth: 1, borderColor: 'rgba(216,137,173,0.16)' },
-  aiChatIcon: { width: 38, height: 38, borderRadius: 13, backgroundColor: 'rgba(216,137,173,0.12)', alignItems: 'center', justifyContent: 'center' },
-  aiChatTitleArea: { flex: 1, marginLeft: 10 },
-  aiChatTitle: { color: '#FFFFFF', fontSize: 12, fontWeight: '800', textAlign: 'right' },
-  aiChatSubtitle: { color: '#77777F', fontSize: 7, marginTop: 3, textAlign: 'right' },
-  aiOnlineBadge: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  onlineDot: { width: 5, height: 5, borderRadius: 3, backgroundColor: '#80D4AB' },
-  onlineText: { color: '#72727A', fontSize: 6, fontWeight: '800' },
+  /* ═══ NEW CLEAN UI ═══ */
+  suggestionScroll: { paddingHorizontal: 16, gap: 7, marginTop: 10, paddingBottom: 2 },
+  chip: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 12,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: 'rgba(255,255,255,0.045)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+  },
+  chipActive: {
+    backgroundColor: 'rgba(216,137,173,0.16)',
+    borderColor: 'rgba(216,137,173,0.5)',
+  },
+  chipEmoji: { fontSize: 12 },
+  chipText: { color: '#B9B9C0', fontSize: 9, fontWeight: '600' },
+  chipTextActive: { color: '#F0CFE0' },
 
-  suggestionsSection: { marginTop: 12 },
-  suggestionsHeader: { paddingHorizontal: 16, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  suggestionsTitle: { color: '#FFFFFF', fontSize: 11, fontWeight: '800', textAlign: 'right' },
-  suggestionsSubtitle: { color: '#66666D', fontSize: 7, marginTop: 2, textAlign: 'right' },
-  suggestionScroll: { paddingHorizontal: 16, gap: 8, marginTop: 9 },
-  suggestionCard: { width: 130, minHeight: 108, borderRadius: 16, padding: 10, backgroundColor: 'rgba(255,255,255,0.04)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.07)', position: 'relative' },
-  suggestionCardActive: { backgroundColor: 'rgba(216,137,173,0.13)', borderColor: 'rgba(216,137,173,0.45)' },
-  suggestionIcon: { width: 31, height: 31, borderRadius: 10, backgroundColor: 'rgba(255,255,255,0.06)', alignItems: 'center', justifyContent: 'center', marginBottom: 7 },
-  suggestionEmoji: { fontSize: 16 },
-  suggestionTitle: { color: '#E4E4E8', fontSize: 9, fontWeight: '800', textAlign: 'right' },
-  suggestionDescription: { color: '#707078', fontSize: 7, lineHeight: 12, marginTop: 4, textAlign: 'right' },
-  gelBadge: { position: 'absolute', top: 8, right: 8, paddingHorizontal: 5, paddingVertical: 2, borderRadius: 6, backgroundColor: 'rgba(216,137,173,0.18)' },
-  gelBadgeText: { color: '#DCA7C0', fontSize: 6, fontWeight: '800' },
+  /* ═══ 💬 PRO CHAT UI ═══ */
+  chatHeaderCard: {
+    marginHorizontal: 16,
+    marginTop: 10,
+    padding: 12,
+    borderRadius: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderWidth: 1,
+    borderColor: 'rgba(216,137,173,0.18)',
+  },
+  aiAvatarWrap: { position: 'relative' },
+  aiAvatarGradient: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  aiOnlineDot: {
+    position: 'absolute',
+    right: -1,
+    bottom: -1,
+    width: 11,
+    height: 11,
+    borderRadius: 6,
+    backgroundColor: '#82D4AD',
+    borderWidth: 2,
+    borderColor: '#0D0D10',
+  },
+  chatHeaderTextWrap: { flex: 1 },
+  chatHeaderName: { color: '#FFFFFF', fontSize: 13, fontWeight: '800', textAlign: 'right' },
+  chatHeaderStatus: { color: '#8A8A92', fontSize: 9, marginTop: 2, textAlign: 'right' },
 
-  messagesContainer: { marginHorizontal: 16, marginTop: 10, gap: 6 },
-  messageBubble: { maxWidth: '90%', paddingHorizontal: 11, paddingVertical: 8, borderRadius: 13, flexDirection: 'row', alignItems: 'center', gap: 6 },
-  userMessage: { alignSelf: 'flex-start', backgroundColor: 'rgba(216,137,173,0.12)', borderBottomLeftRadius: 4 },
-  aiMessage: { alignSelf: 'flex-end', backgroundColor: 'rgba(255,255,255,0.045)', borderBottomRightRadius: 4 },
-  messageText: { flex: 1, color: '#BFC0C6', fontSize: 8, lineHeight: 14, textAlign: 'right' },
+  messagesContainer: { marginHorizontal: 16, marginTop: 12, gap: 10 },
+  messageRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 7 },
+  userRow: { justifyContent: 'flex-start' },
+  aiRow: { justifyContent: 'flex-start' },
+  msgAiAvatar: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: 'rgba(199,131,165,0.22)',
+    borderWidth: 1,
+    borderColor: 'rgba(199,131,165,0.45)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 2,
+  },
+  messageBubble: {
+    maxWidth: '82%',
+    paddingHorizontal: 13,
+    paddingTop: 10,
+    paddingBottom: 6,
+    borderRadius: 16,
+  },
+  userMessage: {
+    alignSelf: 'flex-start',
+    backgroundColor: 'rgba(216,137,173,0.16)',
+    borderColor: 'rgba(216,137,173,0.28)',
+    borderWidth: 1,
+    borderBottomLeftRadius: 5,
+  },
+  aiMessage: {
+    alignSelf: 'flex-start',
+    backgroundColor: 'rgba(255,255,255,0.055)',
+    borderColor: 'rgba(255,255,255,0.07)',
+    borderWidth: 1,
+    borderBottomLeftRadius: 5,
+  },
+  messageText: { fontSize: 11, lineHeight: 19, textAlign: 'right' },
+  userMessageText: { color: '#F5E3EE' },
+  aiMessageText: { color: '#D6D6DC' },
+  messageTime: {
+    color: 'rgba(255,255,255,0.28)',
+    fontSize: 7,
+    textAlign: 'left',
+    marginTop: 4,
+  },
 
-  promptContainer: { marginHorizontal: 16, marginTop: 11, padding: 11, borderRadius: 17, backgroundColor: 'rgba(255,255,255,0.035)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.07)' },
-  promptHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
-  promptLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  promptLabel: { color: '#D8D8DD', fontSize: 9, fontWeight: '800' },
-  promptHint: { color: '#5C5C64', fontSize: 6 },
-  promptInputWrapper: { minHeight: 78, borderRadius: 13, backgroundColor: 'rgba(0,0,0,0.20)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.055)', padding: 9 },
-  promptInput: { color: '#FFFFFF', fontSize: 10, lineHeight: 17, minHeight: 55, paddingRight: 3, paddingBottom: 28 },
-  sendButton: { position: 'absolute', left: 8, bottom: 8, width: 31, height: 31, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: '#B87598' },
+  typingRow: { flexDirection: 'row', gap: 4, paddingVertical: 4, paddingHorizontal: 2 },
+  typingDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#D99AB9',
+  },
+
+  quickReplyScroll: { paddingHorizontal: 16, gap: 7, marginTop: 12 },
+  quickReplyChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(130,212,173,0.07)',
+    borderWidth: 1,
+    borderColor: 'rgba(130,212,173,0.22)',
+  },
+  quickReplyEmoji: { fontSize: 12 },
+  quickReplyLabel: { color: '#BFE0CE', fontSize: 10, fontWeight: '700' },
+
+  /* ═══ PROMPT COMPOSER ═══ */
+  promptContainer: {
+    marginHorizontal: 16,
+    marginTop: 12,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.09)',
+    padding: 10,
+    paddingRight: 52,
+    position: 'relative',
+  },
+  promptInput: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    lineHeight: 18,
+    minHeight: 40,
+    maxHeight: 96,
+    padding: 0,
+    textAlignVertical: 'center',
+  },
+  sendButton: {
+    position: 'absolute',
+    right: 7,
+    bottom: 7,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#C783A5',
+  },
+
+  aiProcessingRow: {
+    marginHorizontal: 16,
+    marginTop: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 8,
+  },
+  aiProcessingText: { color: '#A89AA3', fontSize: 9 },
+
+  safetyNote: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    marginTop: 14,
+    paddingHorizontal: 24,
+  },
+  safetyNoteText: { color: '#5E7A6C', fontSize: 8, textAlign: 'center' },
+
   sendButtonDisabled: { opacity: 0.35 },
-  promptDisclaimer: { color: '#55555C', fontSize: 6, lineHeight: 10, marginTop: 7, textAlign: 'right' },
+  simulateButtonHidden: { opacity: 0.45 },
 
-  simulationPanel: { marginHorizontal: 16, marginTop: 10, padding: 11, borderRadius: 17, backgroundColor: 'rgba(255,255,255,0.035)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.065)' },
-  simulationHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  simulationTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 7 },
-  simulationTitle: { color: '#D8D8DD', fontSize: 9, fontWeight: '800' },
-  simulationToggle: { width: 28, height: 16, borderRadius: 8, padding: 2, backgroundColor: '#323237' },
-  simulationToggleActive: { backgroundColor: 'rgba(216,137,173,0.4)' },
-  simulationToggleDot: { width: 12, height: 12, borderRadius: 6, backgroundColor: '#77777D' },
-  simulationToggleDotActive: { alignSelf: 'flex-end', backgroundColor: '#D99AB9' },
-  simulationInfo: { marginTop: 10, flexDirection: 'row', justifyContent: 'flex-end', gap: 6 },
-  simulationPart: { color: '#68686F', fontSize: 7 },
-  simulationPartValue: { color: '#D99AB9', fontSize: 8, fontWeight: '800' },
-  gelControl: { marginTop: 10, paddingTop: 9, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.05)', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  gelTitle: { color: '#D0D0D5', fontSize: 8, fontWeight: '800', textAlign: 'right' },
-  gelSubtitle: { color: '#5E5E65', fontSize: 6, marginTop: 3, textAlign: 'right' },
-  gelStepper: { flexDirection: 'row', alignItems: 'center', gap: 7 },
-  gelButton: { width: 25, height: 25, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.07)', alignItems: 'center', justifyContent: 'center' },
-  gelValue: { minWidth: 48, alignItems: 'center' },
-  gelNumber: { color: '#D99AB9', fontSize: 13, fontWeight: '900' },
-  gelUnit: { color: '#66666D', fontSize: 6, marginTop: -1 },
-
-  partSection: { paddingTop: 13 },
-  partHeader: { paddingHorizontal: 16, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
-  partHeaderTitle: { color: '#FFFFFF', fontSize: 11, fontWeight: '800' },
-  partHeaderSubtitle: { color: '#68686F', fontSize: 7, marginTop: 2 },
-  filterButton: { width: 31, height: 31, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.055)' },
-  partScroll: { gap: 7, paddingHorizontal: 16 },
-  partCard: { width: 65, height: 62, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.035)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.065)', position: 'relative' },
-  partCardActive: { backgroundColor: 'rgba(216,137,173,0.13)', borderColor: 'rgba(216,137,173,0.45)' },
-  partIcon: { color: '#85858C', fontSize: 17 },
-  partIconActive: { color: '#D99AB9' },
-  partName: { color: '#9A9AA1', fontSize: 8, marginTop: 4 },
-  partNameActive: { color: '#E1B0C8', fontWeight: '800' },
-  partEnglish: { color: '#55555B', fontSize: 6, marginTop: 1 },
-  activeMark: { position: 'absolute', right: 4, top: 4, width: 12, height: 12, borderRadius: 6, backgroundColor: '#C783A5', alignItems: 'center', justifyContent: 'center' },
-
-  controls: { marginHorizontal: 16, marginTop: 9, padding: 10, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.04)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.07)' },
-  controlsHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 5 },
-  controlsTitle: { color: '#FFFFFF', fontSize: 9, fontWeight: '800', textAlign: 'right' },
-  controlsSub: { color: '#66666D', fontSize: 6, marginTop: 2, textAlign: 'right' },
-  beautyControl: { height: 29, flexDirection: 'row', alignItems: 'center', gap: 6 },
-  controlCircle: { width: 23, height: 23, borderRadius: 7, backgroundColor: 'rgba(255,255,255,0.07)', alignItems: 'center', justifyContent: 'center' },
-  minusText: { color: '#FFFFFF', fontSize: 14 },
-  plusText: { color: '#FFFFFF', fontSize: 14 },
-  sliderArea: { flex: 1 },
-  sliderTrack: { height: 3, borderRadius: 2, backgroundColor: 'rgba(255,255,255,0.08)', overflow: 'hidden' },
-  sliderFill: { height: '100%', borderRadius: 2, backgroundColor: '#C783A5' },
-  valueArea: { width: 55, alignItems: 'flex-end' },
-  controlName: { color: '#9999A1', fontSize: 7 },
-  controlValue: { color: '#D99AB9', fontSize: 7, fontWeight: '800' },
-
-  aiProcessing: { marginHorizontal: 16, marginTop: 11, padding: 12, borderRadius: 16, flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: 'rgba(216,137,173,0.07)', borderWidth: 1, borderColor: 'rgba(216,137,173,0.15)' },
-  processingTitle: { color: '#D8D8DD', fontSize: 8, fontWeight: '800', textAlign: 'right' },
-  processingSubtitle: { color: '#696970', fontSize: 6, marginTop: 3, textAlign: 'right' },
+  /* ═══ MANUAL EDIT PANEL ═══ */
+  editPanel: {
+    marginHorizontal: 16,
+    marginTop: 8,
+    padding: 13,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderWidth: 1,
+    borderColor: 'rgba(216,137,173,0.25)',
+  },
+  editPanelHead: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  editPanelTitle: { color: '#F2F2F5', fontSize: 12, fontWeight: '800' },
+  editRow: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 9,
+    height: 38,
+  },
+  editLabel: { color: '#C9C9CE', fontSize: 10, width: 62, textAlign: 'right' },
+  stepper: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 7 },
+  stepBtn: {
+    width: 24,
+    height: 24,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.08)',
+  },
+  trackWrap: {
+    flex: 1,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    position: 'relative',
+    overflow: 'hidden',
+  },
+  track: { ...StyleSheet.absoluteFillObject },
+  notch: {
+    position: 'absolute',
+    left: '50%',
+    top: -2,
+    width: 2,
+    height: 10,
+    marginLeft: -1,
+    borderRadius: 1,
+    backgroundColor: 'rgba(255,255,255,0.35)',
+  },
+  fill: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    borderRadius: 3,
+    backgroundColor: '#C783A5',
+  },
+  fillRight: { left: '50%' },
+  fillLeft: { right: '50%' },
+  editVal: { width: 34, fontSize: 10, fontWeight: '800', textAlign: 'center', color: '#88888F' },
+  editValPos: { color: '#82D4AD' },
+  editValNeg: { color: '#E08CA0' },
+  applyEditBtn: {
+    marginTop: 12,
+    height: 40,
+    borderRadius: 13,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+    backgroundColor: '#EFC9DC',
+  },
+  applyEditText: { color: '#1A1420', fontSize: 12, fontWeight: '800' },
 
   safetyCard: { marginHorizontal: 16, marginTop: 11, padding: 11, borderRadius: 15, flexDirection: 'row', alignItems: 'center', gap: 9, backgroundColor: 'rgba(130,212,173,0.055)', borderWidth: 1, borderColor: 'rgba(130,212,173,0.12)' },
+
+  docCard: { marginHorizontal: 16, marginTop: 14, padding: 13, borderRadius: 20, backgroundColor: 'rgba(216,137,173,0.06)', borderWidth: 1, borderColor: 'rgba(216,137,173,0.22)' },
+  docHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 11 },
+  docBadge: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 9, paddingVertical: 5, borderRadius: 12, backgroundColor: 'rgba(216,137,173,0.14)' },
+  docBadgeText: { color: '#E7BCD4', fontSize: 8, fontWeight: '800' },
+  docArea: { color: '#D99AB9', fontSize: 10, fontWeight: '800' },
+  docRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  docAvatar: { width: 46, height: 46, borderRadius: 23, backgroundColor: 'rgba(199,131,165,0.25)', borderWidth: 1.5, borderColor: '#C783A5', alignItems: 'center', justifyContent: 'center' },
+  docAvatarText: { color: '#F2D7E4', fontSize: 13, fontWeight: '800' },
+  docName: { color: '#FFFFFF', fontSize: 12, fontWeight: '800' },
+  docSpec: { color: '#9A9AA1', fontSize: 8, marginTop: 2 },
+  docMetaRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4 },
+  docRating: { color: '#F5C518', fontSize: 8, fontWeight: '800' },
+  docReviews: { color: '#6B6B73', fontSize: 7 },
+  dot: { color: '#55555C', fontSize: 7 },
+  docExp: { color: '#8A8A92', fontSize: 7 },
+  serviceBox: { marginTop: 11, padding: 10, borderRadius: 13, backgroundColor: 'rgba(0,0,0,0.25)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)' },
+  serviceRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  serviceTitle: { color: '#E3E3E8', fontSize: 9, fontWeight: '700', flex: 1 },
+  priceRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 7 },
+  priceLabel: { color: '#77777F', fontSize: 8 },
+  priceValue: { color: '#82D4AD', fontSize: 9, fontWeight: '800' },
+  ctaButton: { marginTop: 12, borderRadius: 14, overflow: 'hidden' },
+  ctaGradient: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, height: 44 },
+  ctaText: { color: '#FFFFFF', fontSize: 11, fontWeight: '800' },
+  docDisclaimer: { color: '#55555C', fontSize: 7, lineHeight: 11, textAlign: 'right', marginTop: 9 },
   safetyContent: { flex: 1 },
   safetyTitle: { color: '#B7DEC9', fontSize: 8, fontWeight: '800', textAlign: 'right' },
   safetyText: { color: '#646F69', fontSize: 6, lineHeight: 10, marginTop: 3, textAlign: 'right' },
