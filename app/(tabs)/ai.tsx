@@ -67,7 +67,11 @@ import {
 
 // ✅ ایمپورت سرویس API
 import { useRouter } from 'expo-router';
+import AnimatedBackground from '../../components/AnimatedBackground';
+import ChatSkeleton from '../../components/ChatSkeleton';
+import AreaScanFrame from '../../components/AreaScanFrame';
 import { sendThreeDRequest, ThreeDResponse, Recommendation, sendManualEditRequest } from '../../services/api';
+import { sendChatMessage } from '../../services/chat';
 
 /* =========================================================
    HELPERS
@@ -129,6 +133,10 @@ type AIMessage = {
   type: 'user' | 'ai';
   text: string;
   time?: string; // ⏰ ساعت ارسال (مثل ۲۳:۴۵)
+  /** 🖼️ تصویر داخل حباب (base64 بدون پیشوند یا URI) — نتیجه تولید */
+  image?: string;
+  /** 🎛️ برچسب کوچک زیر تصویر (مثلاً «بینی قلمی • شدت ۷۰٪») */
+  imageLabel?: string;
 };
 
 /** ⏰ زمان فعلی به فرمت فارسی HH:MM */
@@ -321,6 +329,8 @@ export default function AiScreen() {
   ======================================================= */
 
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
+  /** 🎯 ناحیه هدف اسکن — از متن درخواست کاربر تشخیص داده میشه */
+  const [scanTarget, setScanTarget] = useState<FacePart | null>(null);
 
   /* =======================================================
      ANALYSIS
@@ -684,6 +694,10 @@ export default function AiScreen() {
           setThreeDPreview(preview);
           msg += '\n🧊 پیش‌نمایش سه‌بعدی از نیم‌رخ ساخته شد';
         }
+        const engine = (result as any).engine as string | undefined;
+        if (engine === 'remote-gpu') {
+          msg += '\n⚡ این نسخه با موتور مولد رندر شده — واقعی‌ترین حالت!';
+        }
         if (!result.filtered_image) {
           msg += '\n\n⚠️ تغییر بصری اعمال نشد — لطفاً درخواست را دقیق‌تر بنویس (مثلاً: لب روسی، بینی گوشتی، نوک بالا)';
         }
@@ -694,9 +708,20 @@ export default function AiScreen() {
         if (rec?.doctor) {
           msg += `\n👨‍⚕️ ${rec.doctor.name} آماده مشاوره است`;
         }
+
+        // 🖼️ پیام AI همراه با خودِ تصویر تولیدشده داخل حباب چت
+        const resultImg = result.filtered_image ?? result.image ?? null;
+        const areaFa = rec?.service ? AREA_FA[rec.service.area] : undefined;
         setMessages((prev) => [
           ...prev,
-          { id: Date.now().toString(), type: 'ai', text: msg, time: nowFa() },
+          {
+            id: Date.now().toString(),
+            type: 'ai',
+            text: msg,
+            time: nowFa(),
+            image: resultImg ?? undefined,
+            imageLabel: areaFa ? `${areaFa} • شبیه‌سازی بوتی` : 'شبیه‌سازی بوتی ✨',
+          },
         ]);
       } else {
         Alert.alert('خطا', 'پردازش با مشکل مواجه شد');
@@ -889,6 +914,20 @@ export default function AiScreen() {
      SEND AI PROMPT
   ======================================================= */
 
+  /* 🎯 تشخیص ناحیه هدف از متن کاربر — برای قاب AI Scan روی همان ناحیه */
+  const detectScanTarget = (text: string): FacePart | null => {
+    const t = text.toLowerCase();
+    if (/بینی|دماغ|نوک|پل بینی|nose|tip/.test(t)) return 'nose';
+    if (/لب|فیلر لب|lip/.test(t)) return 'lips';
+    if (/گونه|چهره گونه|cheek/.test(t)) return 'cheeks';
+    if (/چشم|اطراف چشم|eye/.test(t)) return 'eyes';
+    if (/پیشانی|forehead/.test(t)) return 'forehead';
+    if (/فک|jaw/.test(t)) return 'jaw';
+    if (/چانه|chin/.test(t)) return 'chin';
+    if (/صورت|کل چهره|face|پوست|جوان/.test(t)) return 'face';
+    return null;
+  };
+
   const handleSendPrompt = async () => {
     const cleanPrompt = prompt.trim();
     if (!cleanPrompt) return;
@@ -906,19 +945,32 @@ export default function AiScreen() {
     setIsAIProcessing(true);
     setPrompt('');
 
+    // 🎯 اگر کاربر ناحیه خاصی گفت، اسکن فقط روی همان ناحیه قفل شود
+    setScanTarget(detectScanTarget(cleanPrompt));
+
     if (capturedImage) {
       await handleSendToBackend(capturedImage, cleanPrompt);
     } else {
-      await new Promise((resolve) => setTimeout(resolve, 1300));
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: Date.now().toString(),
-          type: 'ai',
-          text: 'فهمیدم چی می‌خوای! 🌸\nفقط یه عکس ازت لازم دارم — از دوربین بگیر یا از گالری انتخاب کن تا روی صورت خودت شبیه‌سازی کنم.',
-          time: nowFa(),
-        },
-      ]);
+      // 💬 مغز مکالمه سمت سرور — سلام/سؤال/شوخی/... جواب دوستانه میگیرد
+      const chatRes = await sendChatMessage(cleanPrompt, { hasPhoto: false });
+      if (chatRes.reply && !chatRes.is_edit_request) {
+        setMessages((prev) => [
+          ...prev,
+          { id: (Date.now() + 1).toString(), type: 'ai', text: chatRes.reply!, time: nowFa() },
+        ]);
+      } else {
+        // fallback محلی (سرور نبود یا درخواست ادیت بدون عکس بود)
+        await new Promise((resolve) => setTimeout(resolve, 1300));
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: (Date.now() + 1).toString(),
+            type: 'ai',
+            text: 'اوکی رفیق! 🙌\nفقط یه عکس ازت لازم دارم — بگیر از خودت یه سلفی یا از گالری انتخاب کن، بذار ببینیم قراره چی بشی! 😍',
+            time: nowFa(),
+          },
+        ]);
+      }
     }
 
     setIsAIProcessing(false);
@@ -943,7 +995,7 @@ export default function AiScreen() {
       {
         id: Date.now().toString(),
         type: 'ai',
-        text: 'شبیه‌سازی اعمال شد ✨\nاین نتیجه تقریبی برای دیدن حس تغییره — نظر پزشک پس از معاینه ملاک نهایی است.',
+        text: 'تمومه! اینم از نتیجه ✨\nچطوره؟ اگه دوستش نداری بگو دوباره بزنم — ولی نظر خودت مهمه، پزشک فقط آخرش تأیید نهایی رو میده 😉',
         time: nowFa(),
       },
     ]);
@@ -965,7 +1017,7 @@ export default function AiScreen() {
   if (!cameraPermission) {
     return (
       <View style={styles.permissionScreen}>
-        <ActivityIndicator size="large" color="#D99AB9" />
+        <ActivityIndicator size="large" color="#FF6EC7" />
         <Text style={styles.permissionText}>در حال آماده‌سازی دوربین...</Text>
       </View>
     );
@@ -977,10 +1029,10 @@ export default function AiScreen() {
 
   if (!cameraPermission.granted) {
     return (
-      <LinearGradient colors={['#0B0B0D', '#151117', '#0A0A0C']} style={styles.container}>
+      <LinearGradient colors={['#1E1038', '#2A1846', '#12081F']} style={styles.container}>
         <SafeAreaView style={styles.permissionContainer}>
           <View style={styles.permissionIcon}>
-            <Camera size={38} color="#D99AB9" />
+            <Camera size={38} color="#FF6EC7" />
           </View>
           <Text style={styles.permissionTitle}>دسترسی به دوربین</Text>
           <Text style={styles.permissionDescription}>
@@ -1001,7 +1053,7 @@ export default function AiScreen() {
   if (!capturedImage && cameraMode === 'live') {
     return (
       <View style={styles.cameraRoot}>
-        <StatusBar barStyle="light-content" backgroundColor="#050507" />
+        <StatusBar barStyle="light-content" backgroundColor="#12081F" />
         <CameraView
           ref={cameraRef}
           style={StyleSheet.absoluteFill}
@@ -1042,11 +1094,11 @@ export default function AiScreen() {
               <View style={styles.frameCornerBR} />
             </Animated.View>
             <View style={styles.faceDetectionBadge}>
-              <ScanFace size={14} color="#D99AB9" />
+              <ScanFace size={14} color="#FF6EC7" />
               <Text style={styles.faceDetectionText}>
                 {faceDetected ? 'Face detected' : 'Looking for face...'}
               </Text>
-              {faceDetected && <Check size={12} color="#82D4AD" />}
+              {faceDetected && <Check size={12} color="#5EDBC4" />}
             </View>
           </View>
 
@@ -1062,7 +1114,7 @@ export default function AiScreen() {
               <RefreshCw size={19} color="#FFFFFF" />
             </TouchableOpacity>
             <View style={styles.liveBottomText}>
-              <Sparkles size={12} color="#D99AB9" />
+              <Sparkles size={12} color="#FF6EC7" />
               <Text style={styles.liveBottomTextValue}>چهره را داخل کادر قرار بده</Text>
             </View>
           </View>
@@ -1078,7 +1130,9 @@ export default function AiScreen() {
   return (
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <View style={styles.container}>
-        <LinearGradient colors={['#0A0A0E', '#131018', '#0A0A0E']} style={StyleSheet.absoluteFill} />
+        <LinearGradient colors={['#1C0F33', '#281748', '#12081F']} style={StyleSheet.absoluteFill} />
+        {/* ✨ پس‌زمینه زنده: هاله‌های شناور + ذرات درخشان */}
+        <AnimatedBackground particles={12} />
         {/* ambient top glow */}
         <View style={styles.ambientGlow} pointerEvents="none" />
         <SafeAreaView style={styles.safeArea}>
@@ -1093,7 +1147,7 @@ export default function AiScreen() {
               activeOpacity={0.7}
             >
               <View style={styles.headerIconChip}>
-                <ArrowLeft size={15} color="#E7C6D8" strokeWidth={2} />
+                <ArrowLeft size={15} color="#FFB3E2" strokeWidth={2} />
               </View>
             </TouchableOpacity>
             <View style={styles.headerCenter}>
@@ -1115,7 +1169,7 @@ export default function AiScreen() {
             <View style={styles.stageCard}>
               {/* gradient border glow */}
               <LinearGradient
-                colors={['rgba(217,154,185,0.45)', 'rgba(217,154,185,0.06)', 'rgba(130,212,173,0.25)']}
+                colors={['rgba(232,193,112,0.45)', 'rgba(232,193,112,0.06)', 'rgba(94,219,196,0.25)']}
                 start={{ x: 0, y: 0 }}
                 end={{ x: 1, y: 1 }}
                 style={styles.stageBorder}
@@ -1184,17 +1238,17 @@ export default function AiScreen() {
               <View style={styles.stageStatusPill} pointerEvents="none">
                 {isScanning ? (
                   <>
-                    <ActivityIndicator size={8} color="#D99AB9" />
+                    <ActivityIndicator size={8} color="#FF6EC7" />
                     <Text style={styles.stageStatusText}>Scanning…</Text>
                   </>
                 ) : analysisDone ? (
                   <>
-                    <Check size={10} color="#82D4AD" />
-                    <Text style={[styles.stageStatusText, { color: '#A9DEC6' }]}>3D Ready</Text>
+                    <Check size={10} color="#5EDBC4" />
+                    <Text style={[styles.stageStatusText, { color: '#A8F0E2' }]}>3D Ready</Text>
                   </>
                 ) : (
                   <>
-                    <Sparkles size={10} color="#D99AB9" />
+                    <Sparkles size={10} color="#FF6EC7" />
                     <Text style={styles.stageStatusText}>Waiting</Text>
                   </>
                 )}
@@ -1204,7 +1258,7 @@ export default function AiScreen() {
             {/* before/after badge */}
             {analysisDone && (
               <View style={styles.completedBadge}>
-                <Check size={11} color="#DCA9C1" />
+                <Check size={11} color="#FF6EC7" />
                 <Text style={styles.completedText}>Face Scan Complete</Text>
               </View>
             )}
@@ -1221,7 +1275,7 @@ export default function AiScreen() {
               activeOpacity={0.75}
               disabled={!(filteredImage ?? originalImage)}
             >
-              <Eye size={13} color={showBefore ? '#E7BCD4' : '#B9B9C0'} />
+              <Eye size={13} color={showBefore ? '#FFB3E2' : '#B9B9C0'} />
               <Text style={[styles.smallActionText, showBefore && styles.smallActionTextActive]}>
                 {showBefore ? 'قبل از ادیت' : 'بعد از ادیت'}
               </Text>
@@ -1231,7 +1285,7 @@ export default function AiScreen() {
               onPress={() => setShowEditPanel(!showEditPanel)}
               activeOpacity={0.75}
             >
-              <SlidersHorizontal size={13} color={showEditPanel ? '#E7BCD4' : '#B9B9C0'} />
+              <SlidersHorizontal size={13} color={showEditPanel ? '#FFB3E2' : '#B9B9C0'} />
               <Text style={[styles.smallActionText, showEditPanel && styles.smallActionTextActive]}>
                 ادیت دستی
               </Text>
@@ -1336,7 +1390,7 @@ export default function AiScreen() {
               <View style={styles.chatHeaderCard}>
                 <View style={styles.aiAvatarWrap}>
                   <LinearGradient
-                    colors={['#C783A5', '#8E5B77']}
+                    colors={['#F0CD8B', '#B08040']}
                     start={{ x: 0, y: 0 }}
                     end={{ x: 1, y: 1 }}
                     style={styles.aiAvatarGradient}
@@ -1348,7 +1402,7 @@ export default function AiScreen() {
                 <View style={styles.chatHeaderTextWrap}>
                   <Text style={styles.chatHeaderName}>بوتی‌ام</Text>
                   <Text style={styles.chatHeaderStatus}>
-                    {isAIProcessing ? 'در حال پردازش…' : 'مشاور زیبایی • آنلاین'}
+                    {isAIProcessing ? 'دارم فکر می‌کنم… 🤔' : 'رفیق زیبایی‌ت • همیشه آنلاین 💬'}
                   </Text>
                 </View>
                 <Clock size={12} color="#55555C" />
@@ -1380,48 +1434,76 @@ export default function AiScreen() {
                 </ScrollView>
               )}
 
+              {/* ═══ ⏳ SKELETON — لودینگ دوستانه موقع اسکن اولیه ═══ */}
+              {isScanning && messages.length === 0 && <ChatSkeleton />}
+
               {/* ═══ MESSAGES — full history, avatar + timestamp ═══ */}
-              {messages.length > 0 && (
+              {!isScanning && messages.length > 0 && (
                 <View style={styles.messagesContainer}>
-                  {messages.map((message) => (
-                    <View
-                      key={message.id}
-                      style={[
-                        styles.messageRow,
-                        message.type === 'user' ? styles.userRow : styles.aiRow,
-                      ]}
-                    >
-                      {message.type === 'ai' && (
-                        <View style={styles.msgAiAvatar}>
-                          <Sparkle size={10} color="#F0CFE0" />
-                        </View>
-                      )}
+                  {messages.map((message) => {
+                    const isUser = message.type === 'user';
+                    return (
                       <View
+                        key={message.id}
                         style={[
-                          styles.messageBubble,
-                          message.type === 'user' ? styles.userMessage : styles.aiMessage,
+                          styles.messageRow,
+                          isUser ? styles.userRow : styles.aiRow,
                         ]}
                       >
-                        <Text
+                        {!isUser && (
+                          <View style={styles.msgAiAvatar}>
+                            <Sparkle size={10} color="#FFB3E2" />
+                          </View>
+                        )}
+                        <View
                           style={[
-                            styles.messageText,
-                            message.type === 'user'
-                              ? styles.userMessageText
-                              : styles.aiMessageText,
+                            styles.messageBubble,
+                            isUser ? styles.userMessage : styles.aiMessage,
+                            message.image && styles.messageWithImage,
                           ]}
                         >
-                          {message.text}
-                        </Text>
-                        <Text style={styles.messageTime}>{message.time ?? ''}</Text>
+                          {/* 🖼️ تصویر تولیدشده داخل حباب */}
+                          {message.image && (
+                            <>
+                              <RNImage
+                                source={{
+                                  uri: message.image.startsWith('data:')
+                                    ? message.image
+                                    : `data:image/jpeg;base64,${message.image}`,
+                                }}
+                                style={styles.bubbleImage}
+                                resizeMode="cover"
+                              />
+                              {message.imageLabel && (
+                                <View style={styles.bubbleImageTag}>
+                                  <Sparkles size={8} color="#F0CD8B" />
+                                  <Text style={styles.bubbleImageTagText}>
+                                    {message.imageLabel}
+                                  </Text>
+                                </View>
+                              )}
+                            </>
+                          )}
+
+                          <Text
+                            style={[
+                              styles.messageText,
+                              isUser ? styles.userMessageText : styles.aiMessageText,
+                            ]}
+                          >
+                            {message.text}
+                          </Text>
+                          <Text style={styles.messageTime}>{message.time ?? ''}</Text>
+                        </View>
                       </View>
-                    </View>
-                  ))}
+                    );
+                  })}
 
                   {/* ⌨️ TYPING INDICATOR — سه‌نقطه موج‌دار */}
                   {isAIProcessing && (
                     <View style={styles.aiRow}>
                       <View style={styles.msgAiAvatar}>
-                        <Sparkle size={10} color="#F0CFE0" />
+                        <Sparkle size={10} color="#FFB3E2" />
                       </View>
                       <View style={[styles.messageBubble, styles.aiMessage]}>
                         <View style={styles.typingRow}>
@@ -1505,8 +1587,8 @@ export default function AiScreen() {
               {/* ═══ AI PROCESSING — slim inline indicator ═══ */}
               {isAIProcessing && (
                 <View style={styles.aiProcessingRow}>
-                  <ActivityIndicator size="small" color="#D99AB9" />
-                  <Text style={styles.aiProcessingText}>Beauty AI در حال پردازش…</Text>
+                  <ActivityIndicator size="small" color="#FF6EC7" />
+                  <Text style={styles.aiProcessingText}>چند لحظه صبر کن، داری قشنگ‌تر میشی… ✨</Text>
                 </View>
               )}
 
@@ -1536,7 +1618,7 @@ export default function AiScreen() {
 
               {/* ═══ SAFETY — minimal footer note ═══ */}
               <View style={styles.safetyNote}>
-                <ShieldCheck size={12} color="#5E7A6C" />
+                <ShieldCheck size={12} color="#4E8578" />
                 <Text style={styles.safetyNoteText}>
                   شبیه‌سازی بصری است و جایگزین نظر پزشک نمی‌شود
                 </Text>
@@ -1553,7 +1635,7 @@ export default function AiScreen() {
                   activeOpacity={0.9}
                   onPress={applySimulation}
                 >
-                  <LinearGradient colors={['#C783A5', '#966581']} style={styles.simulateGradient}>
+                  <LinearGradient colors={['#FF6EC7', '#B84DD8']} style={styles.simulateGradient}>
                     <Wand2 size={15} color="#FFFFFF" />
                     <Text style={styles.simulateText}>اعمال شبیه‌سازی</Text>
                   </LinearGradient>
@@ -1588,7 +1670,7 @@ function DoctorCard({
       {/* header */}
       <View style={styles.docHeader}>
         <View style={styles.docBadge}>
-          <Stethoscope size={13} color="#E7BCD4" />
+          <Stethoscope size={13} color="#FFB3E2" />
           <Text style={styles.docBadgeText}>پیشنهاد متخصص</Text>
         </View>
         {areaFa && <Text style={styles.docArea}>{areaFa}</Text>}
@@ -1616,7 +1698,7 @@ function DoctorCard({
       {service && (
         <View style={styles.serviceBox}>
           <View style={styles.serviceRow}>
-            <Sparkles size={11} color="#D99AB9" />
+            <Sparkles size={11} color="#FF6EC7" />
             <Text style={styles.serviceTitle}>{service.title}</Text>
           </View>
           <View style={styles.priceRow}>
@@ -1640,7 +1722,7 @@ function DoctorCard({
 
       {/* CTA */}
       <TouchableOpacity style={styles.ctaButton} activeOpacity={0.85} onPress={onPressCta}>
-        <LinearGradient colors={['#C783A5', '#966581']} style={styles.ctaGradient}>
+        <LinearGradient colors={['#FF6EC7', '#B84DD8']} style={styles.ctaGradient}>
           <CalendarCheck size={15} color="#FFFFFF" />
           <Text style={styles.ctaText}>{recommendation.cta?.text ?? 'رزرو مشاوره رایگان'}</Text>
         </LinearGradient>
@@ -1750,15 +1832,15 @@ function FaceMarker({ style }: { style: any }) {
 ========================================================= */
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#090A0C' },
-  cameraRoot: { flex: 1, backgroundColor: '#050507' },
+  container: { flex: 1, backgroundColor: '#12081F' },
+  cameraRoot: { flex: 1, backgroundColor: '#12081F' },
   safeArea: { flex: 1 },
   cameraSafeArea: { flex: 1 },
   scrollContent: { paddingBottom: 30 },
 
   permissionScreen: {
     flex: 1,
-    backgroundColor: '#090A0C',
+    backgroundColor: '#12081F',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1773,9 +1855,9 @@ const styles = StyleSheet.create({
     width: 85,
     height: 85,
     borderRadius: 28,
-    backgroundColor: 'rgba(216,137,173,0.10)',
+    backgroundColor: 'rgba(232,193,112,0.10)',
     borderWidth: 1,
-    borderColor: 'rgba(216,137,173,0.25)',
+    borderColor: 'rgba(232,193,112,0.25)',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1806,7 +1888,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.12)',
   },
-  liveGreenDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#80D4AB' },
+  liveGreenDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#5EDBC4' },
   liveStatusText: { color: '#D4D4D8', fontSize: 8, fontWeight: '800', letterSpacing: 1 },
   liveCenter: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   liveFaceFrame: {
@@ -1814,7 +1896,7 @@ const styles = StyleSheet.create({
     height: height * 0.48,
     borderRadius: width * 0.36,
     borderWidth: 1,
-    borderColor: 'rgba(220,170,195,0.35)',
+    borderColor: 'rgba(232,193,112,0.35)',
   },
   frameCornerTL: {
     position: 'absolute',
@@ -1824,7 +1906,7 @@ const styles = StyleSheet.create({
     top: -1,
     borderLeftWidth: 2,
     borderTopWidth: 2,
-    borderColor: '#D99AB9',
+    borderColor: '#FF6EC7',
     borderTopLeftRadius: 14,
   },
   frameCornerTR: {
@@ -1835,7 +1917,7 @@ const styles = StyleSheet.create({
     top: -1,
     borderRightWidth: 2,
     borderTopWidth: 2,
-    borderColor: '#D99AB9',
+    borderColor: '#FF6EC7',
     borderTopRightRadius: 14,
   },
   frameCornerBL: {
@@ -1846,7 +1928,7 @@ const styles = StyleSheet.create({
     bottom: -1,
     borderLeftWidth: 2,
     borderBottomWidth: 2,
-    borderColor: '#D99AB9',
+    borderColor: '#FF6EC7',
     borderBottomLeftRadius: 14,
   },
   frameCornerBR: {
@@ -1857,7 +1939,7 @@ const styles = StyleSheet.create({
     bottom: -1,
     borderRightWidth: 2,
     borderBottomWidth: 2,
-    borderColor: '#D99AB9',
+    borderColor: '#FF6EC7',
     borderBottomRightRadius: 14,
   },
   faceDetectionBadge: {
@@ -1902,7 +1984,7 @@ const styles = StyleSheet.create({
   headerCenter: { alignItems: 'center' },
   analysisTitle: { color: '#FFFFFF', fontSize: 15, fontWeight: '800' },
   analysisMode: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 3 },
-  modeDot: { width: 5, height: 5, borderRadius: 3, backgroundColor: '#82D4AD' },
+  modeDot: { width: 5, height: 5, borderRadius: 3, backgroundColor: '#5EDBC4' },
   modeText: { color: '#77777F', fontSize: 7 },
   closeButton: { width: 31, height: 31, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.08)', alignItems: 'center', justifyContent: 'center' },
 
@@ -1913,7 +1995,7 @@ const styles = StyleSheet.create({
     width: width * 1.1,
     height: 320,
     borderRadius: 160,
-    backgroundColor: 'rgba(216,137,173,0.07)',
+    backgroundColor: 'rgba(232,193,112,0.07)',
   },
   headerIconButton: { width: 34, height: 34, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.05)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)' },
   headerIconChip: { alignItems: 'center', justifyContent: 'center' },
@@ -1925,7 +2007,7 @@ const styles = StyleSheet.create({
     position: 'relative',
   },
   stageBorder: { ...StyleSheet.absoluteFillObject, borderRadius: 28 },
-  stageInner: { flex: 1, borderRadius: 27, overflow: 'hidden', backgroundColor: '#101013' },
+  stageInner: { flex: 1, borderRadius: 27, overflow: 'hidden', backgroundColor: '#191512' },
   filteredPhoto: { ...StyleSheet.absoluteFillObject, width: '100%', height: '100%' },
   stageStatusPill: {
     position: 'absolute',
@@ -1944,34 +2026,34 @@ const styles = StyleSheet.create({
   stageStatusText: { color: '#C9C9CE', fontSize: 8, fontWeight: '800' },
   emptyFaceText: { color: '#55555C', fontSize: 9, marginTop: 10 },
   modeDotBusy: { backgroundColor: '#E7BC5A' },
-  smallActionTextActive: { color: '#E7BCD4' },
+  smallActionTextActive: { color: '#FFB3E2' },
 
   faceStage: { height: 360, alignItems: 'center', justifyContent: 'center' },
   emptyFace: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  scanLineNew: { position: 'absolute', left: 0, right: 0, height: 2, backgroundColor: '#DDA2C1', shadowColor: '#DDA2C1', shadowOpacity: 1, shadowRadius: 12 },
+  scanLineNew: { position: 'absolute', left: 0, right: 0, height: 2, backgroundColor: '#FF6EC7', shadowColor: '#FF6EC7', shadowOpacity: 1, shadowRadius: 12 },
   completedBadge: { position: 'absolute', bottom: 8, flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 11, paddingVertical: 7, borderRadius: 15, backgroundColor: 'rgba(8,8,10,0.75)' },
   completedText: { color: '#D7D7DB', fontSize: 8 },
 
-  faceMarker: { position: 'absolute', width: 17, height: 17, borderRadius: 9, borderWidth: 1, borderColor: 'rgba(220,160,190,0.8)', alignItems: 'center', justifyContent: 'center' },
-  faceMarkerDot: { width: 4, height: 4, borderRadius: 2, backgroundColor: '#D99AB9' },
+  faceMarker: { position: 'absolute', width: 17, height: 17, borderRadius: 9, borderWidth: 1, borderColor: 'rgba(232,193,112,0.8)', alignItems: 'center', justifyContent: 'center' },
+  faceMarkerDot: { width: 4, height: 4, borderRadius: 2, backgroundColor: '#FF6EC7' },
 
   simulationLips: { position: 'absolute', left: '50%', top: '62%', width: 65, height: 35, marginLeft: -32, marginTop: -17, alignItems: 'center', justifyContent: 'center' },
-  lipUpper: { position: 'absolute', width: 48, height: 12, borderRadius: 20, backgroundColor: 'rgba(220,105,145,0.42)', top: 7 },
-  lipLower: { position: 'absolute', width: 54, height: 14, borderRadius: 20, backgroundColor: 'rgba(230,116,154,0.46)', bottom: 3 },
-  cheekGlow: { position: 'absolute', width: 50, height: 30, borderRadius: 30, backgroundColor: 'rgba(230,130,170,0.25)' },
+  lipUpper: { position: 'absolute', width: 48, height: 12, borderRadius: 20, backgroundColor: 'rgba(240,205,139,0.42)', top: 7 },
+  lipLower: { position: 'absolute', width: 54, height: 14, borderRadius: 20, backgroundColor: 'rgba(255,158,125,0.46)', bottom: 3 },
+  cheekGlow: { position: 'absolute', width: 50, height: 30, borderRadius: 30, backgroundColor: 'rgba(255,158,125,0.25)' },
   cheekLeft: { left: '13%', top: '50%' },
   cheekRight: { right: '13%', top: '50%' },
-  jawOverlay: { position: 'absolute', left: '17%', right: '17%', bottom: '19%', height: 25, borderBottomWidth: 4, borderColor: 'rgba(220,145,180,0.30)', borderRadius: 50 },
-  chinOverlay: { position: 'absolute', left: '40%', top: '69%', width: 50, height: 35, marginLeft: -25, borderRadius: 25, backgroundColor: 'rgba(215,145,175,0.22)' },
-  noseOverlay: { position: 'absolute', left: '43%', top: '46%', width: 34, height: 45, borderRadius: 20, borderWidth: 2, borderColor: 'rgba(220,160,190,0.24)' },
-  eyeGlow: { position: 'absolute', width: 42, height: 17, borderRadius: 20, backgroundColor: 'rgba(210,170,200,0.22)' },
+  jawOverlay: { position: 'absolute', left: '17%', right: '17%', bottom: '19%', height: 25, borderBottomWidth: 4, borderColor: 'rgba(240,205,139,0.30)', borderRadius: 50 },
+  chinOverlay: { position: 'absolute', left: '40%', top: '69%', width: 50, height: 35, marginLeft: -25, borderRadius: 25, backgroundColor: 'rgba(240,205,139,0.22)' },
+  noseOverlay: { position: 'absolute', left: '43%', top: '46%', width: 34, height: 45, borderRadius: 20, borderWidth: 2, borderColor: 'rgba(232,193,112,0.24)' },
+  eyeGlow: { position: 'absolute', width: 42, height: 17, borderRadius: 20, backgroundColor: 'rgba(243,221,174,0.22)' },
   eyeLeft: { left: '18%', top: '36%' },
   eyeRight: { right: '18%', top: '36%' },
-  fullFaceOverlay: { position: 'absolute', left: '9%', right: '9%', top: '7%', bottom: '7%', borderRadius: 150, borderWidth: 2, borderColor: 'rgba(220,160,190,0.18)' },
+  fullFaceOverlay: { position: 'absolute', left: '9%', right: '9%', top: '7%', bottom: '7%', borderRadius: 150, borderWidth: 2, borderColor: 'rgba(232,193,112,0.18)' },
 
   actionRow: { flexDirection: 'row', justifyContent: 'center', gap: 8, marginBottom: 10 },
   smallAction: { height: 35, paddingHorizontal: 12, borderRadius: 17, flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(255,255,255,0.055)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)' },
-  smallActionActive: { backgroundColor: 'rgba(216,137,173,0.15)', borderColor: 'rgba(216,137,173,0.35)' },
+  smallActionActive: { backgroundColor: 'rgba(232,193,112,0.15)', borderColor: 'rgba(232,193,112,0.35)' },
   smallActionText: { color: '#C7C7CC', fontSize: 8, fontWeight: '700' },
 
   /* ═══ NEW CLEAN UI ═══ */
@@ -1988,12 +2070,12 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255,255,255,0.08)',
   },
   chipActive: {
-    backgroundColor: 'rgba(216,137,173,0.16)',
-    borderColor: 'rgba(216,137,173,0.5)',
+    backgroundColor: 'rgba(232,193,112,0.16)',
+    borderColor: 'rgba(232,193,112,0.5)',
   },
   chipEmoji: { fontSize: 12 },
   chipText: { color: '#B9B9C0', fontSize: 9, fontWeight: '600' },
-  chipTextActive: { color: '#F0CFE0' },
+  chipTextActive: { color: '#FFB3E2' },
 
   /* ═══ 💬 PRO CHAT UI ═══ */
   chatHeaderCard: {
@@ -2006,7 +2088,7 @@ const styles = StyleSheet.create({
     gap: 10,
     backgroundColor: 'rgba(255,255,255,0.04)',
     borderWidth: 1,
-    borderColor: 'rgba(216,137,173,0.18)',
+    borderColor: 'rgba(232,193,112,0.18)',
   },
   aiAvatarWrap: { position: 'relative' },
   aiAvatarGradient: {
@@ -2023,9 +2105,9 @@ const styles = StyleSheet.create({
     width: 11,
     height: 11,
     borderRadius: 6,
-    backgroundColor: '#82D4AD',
+    backgroundColor: '#5EDBC4',
     borderWidth: 2,
-    borderColor: '#0D0D10',
+    borderColor: '#211438',
   },
   chatHeaderTextWrap: { flex: 1 },
   chatHeaderName: { color: '#FFFFFF', fontSize: 13, fontWeight: '800', textAlign: 'right' },
@@ -2039,9 +2121,9 @@ const styles = StyleSheet.create({
     width: 26,
     height: 26,
     borderRadius: 13,
-    backgroundColor: 'rgba(199,131,165,0.22)',
+    backgroundColor: 'rgba(201,154,75,0.22)',
     borderWidth: 1,
-    borderColor: 'rgba(199,131,165,0.45)',
+    borderColor: 'rgba(201,154,75,0.45)',
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 2,
@@ -2053,10 +2135,33 @@ const styles = StyleSheet.create({
     paddingBottom: 6,
     borderRadius: 16,
   },
+  messageWithImage: { maxWidth: '88%', padding: 8, paddingTop: 8 },
+  bubbleImage: {
+    width: '100%',
+    aspectRatio: 0.85,
+    borderRadius: 12,
+    backgroundColor: '#191512',
+    marginBottom: 8,
+  },
+  bubbleImageTag: {
+    position: 'absolute',
+    top: 14,
+    right: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 10,
+    backgroundColor: 'rgba(10,8,6,0.72)',
+    borderWidth: 1,
+    borderColor: 'rgba(240,205,139,0.35)',
+  },
+  bubbleImageTagText: { color: '#F0CD8B', fontSize: 7.5, fontWeight: '800' },
   userMessage: {
     alignSelf: 'flex-start',
-    backgroundColor: 'rgba(216,137,173,0.16)',
-    borderColor: 'rgba(216,137,173,0.28)',
+    backgroundColor: 'rgba(232,193,112,0.16)',
+    borderColor: 'rgba(232,193,112,0.28)',
     borderWidth: 1,
     borderBottomLeftRadius: 5,
   },
@@ -2068,7 +2173,7 @@ const styles = StyleSheet.create({
     borderBottomLeftRadius: 5,
   },
   messageText: { fontSize: 11, lineHeight: 19, textAlign: 'right' },
-  userMessageText: { color: '#F5E3EE' },
+  userMessageText: { color: '#FBF3E2' },
   aiMessageText: { color: '#D6D6DC' },
   messageTime: {
     color: 'rgba(255,255,255,0.28)',
@@ -2082,7 +2187,7 @@ const styles = StyleSheet.create({
     width: 6,
     height: 6,
     borderRadius: 3,
-    backgroundColor: '#D99AB9',
+    backgroundColor: '#FF6EC7',
   },
 
   quickReplyScroll: { paddingHorizontal: 16, gap: 7, marginTop: 12 },
@@ -2093,12 +2198,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     height: 32,
     borderRadius: 16,
-    backgroundColor: 'rgba(130,212,173,0.07)',
+    backgroundColor: 'rgba(94,219,196,0.07)',
     borderWidth: 1,
-    borderColor: 'rgba(130,212,173,0.22)',
+    borderColor: 'rgba(94,219,196,0.22)',
   },
   quickReplyEmoji: { fontSize: 12 },
-  quickReplyLabel: { color: '#BFE0CE', fontSize: 10, fontWeight: '700' },
+  quickReplyLabel: { color: '#A8F0E2', fontSize: 10, fontWeight: '700' },
 
   /* ═══ PROMPT COMPOSER ═══ */
   promptContainer: {
@@ -2130,7 +2235,7 @@ const styles = StyleSheet.create({
     borderRadius: 17,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#C783A5',
+    backgroundColor: '#FF6EC7',
   },
 
   aiProcessingRow: {
@@ -2142,7 +2247,7 @@ const styles = StyleSheet.create({
     gap: 8,
     paddingVertical: 8,
   },
-  aiProcessingText: { color: '#A89AA3', fontSize: 9 },
+  aiProcessingText: { color: '#A89C88', fontSize: 9 },
 
   safetyNote: {
     flexDirection: 'row',
@@ -2152,7 +2257,7 @@ const styles = StyleSheet.create({
     marginTop: 14,
     paddingHorizontal: 24,
   },
-  safetyNoteText: { color: '#5E7A6C', fontSize: 8, textAlign: 'center' },
+  safetyNoteText: { color: '#4E8578', fontSize: 8, textAlign: 'center' },
 
   sendButtonDisabled: { opacity: 0.35 },
   simulateButtonHidden: { opacity: 0.45 },
@@ -2165,7 +2270,7 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     backgroundColor: 'rgba(255,255,255,0.04)',
     borderWidth: 1,
-    borderColor: 'rgba(216,137,173,0.25)',
+    borderColor: 'rgba(232,193,112,0.25)',
   },
   editPanelHead: {
     flexDirection: 'row-reverse',
@@ -2214,12 +2319,12 @@ const styles = StyleSheet.create({
     top: 0,
     bottom: 0,
     borderRadius: 3,
-    backgroundColor: '#C783A5',
+    backgroundColor: '#FF6EC7',
   },
   fillRight: { left: '50%' },
   fillLeft: { right: '50%' },
   editVal: { width: 34, fontSize: 10, fontWeight: '800', textAlign: 'center', color: '#88888F' },
-  editValPos: { color: '#82D4AD' },
+  editValPos: { color: '#5EDBC4' },
   editValNeg: { color: '#E08CA0' },
   applyEditBtn: {
     marginTop: 12,
@@ -2229,20 +2334,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 7,
-    backgroundColor: '#EFC9DC',
+    backgroundColor: '#F0CD8B',
   },
   applyEditText: { color: '#1A1420', fontSize: 12, fontWeight: '800' },
 
-  safetyCard: { marginHorizontal: 16, marginTop: 11, padding: 11, borderRadius: 15, flexDirection: 'row', alignItems: 'center', gap: 9, backgroundColor: 'rgba(130,212,173,0.055)', borderWidth: 1, borderColor: 'rgba(130,212,173,0.12)' },
+  safetyCard: { marginHorizontal: 16, marginTop: 11, padding: 11, borderRadius: 15, flexDirection: 'row', alignItems: 'center', gap: 9, backgroundColor: 'rgba(94,219,196,0.055)', borderWidth: 1, borderColor: 'rgba(94,219,196,0.12)' },
 
-  docCard: { marginHorizontal: 16, marginTop: 14, padding: 13, borderRadius: 20, backgroundColor: 'rgba(216,137,173,0.06)', borderWidth: 1, borderColor: 'rgba(216,137,173,0.22)' },
+  docCard: { marginHorizontal: 16, marginTop: 14, padding: 13, borderRadius: 20, backgroundColor: 'rgba(232,193,112,0.06)', borderWidth: 1, borderColor: 'rgba(232,193,112,0.22)' },
   docHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 11 },
-  docBadge: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 9, paddingVertical: 5, borderRadius: 12, backgroundColor: 'rgba(216,137,173,0.14)' },
-  docBadgeText: { color: '#E7BCD4', fontSize: 8, fontWeight: '800' },
-  docArea: { color: '#D99AB9', fontSize: 10, fontWeight: '800' },
+  docBadge: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 9, paddingVertical: 5, borderRadius: 12, backgroundColor: 'rgba(232,193,112,0.14)' },
+  docBadgeText: { color: '#FFB3E2', fontSize: 8, fontWeight: '800' },
+  docArea: { color: '#FF6EC7', fontSize: 10, fontWeight: '800' },
   docRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  docAvatar: { width: 46, height: 46, borderRadius: 23, backgroundColor: 'rgba(199,131,165,0.25)', borderWidth: 1.5, borderColor: '#C783A5', alignItems: 'center', justifyContent: 'center' },
-  docAvatarText: { color: '#F2D7E4', fontSize: 13, fontWeight: '800' },
+  docAvatar: { width: 46, height: 46, borderRadius: 23, backgroundColor: 'rgba(201,154,75,0.25)', borderWidth: 1.5, borderColor: '#FF6EC7', alignItems: 'center', justifyContent: 'center' },
+  docAvatarText: { color: '#FFB3E2', fontSize: 13, fontWeight: '800' },
   docName: { color: '#FFFFFF', fontSize: 12, fontWeight: '800' },
   docSpec: { color: '#9A9AA1', fontSize: 8, marginTop: 2 },
   docMetaRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4 },
@@ -2255,14 +2360,14 @@ const styles = StyleSheet.create({
   serviceTitle: { color: '#E3E3E8', fontSize: 9, fontWeight: '700', flex: 1 },
   priceRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 7 },
   priceLabel: { color: '#77777F', fontSize: 8 },
-  priceValue: { color: '#82D4AD', fontSize: 9, fontWeight: '800' },
+  priceValue: { color: '#5EDBC4', fontSize: 9, fontWeight: '800' },
   ctaButton: { marginTop: 12, borderRadius: 14, overflow: 'hidden' },
   ctaGradient: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, height: 44 },
   ctaText: { color: '#FFFFFF', fontSize: 11, fontWeight: '800' },
   docDisclaimer: { color: '#55555C', fontSize: 7, lineHeight: 11, textAlign: 'right', marginTop: 9 },
   safetyContent: { flex: 1 },
-  safetyTitle: { color: '#B7DEC9', fontSize: 8, fontWeight: '800', textAlign: 'right' },
-  safetyText: { color: '#646F69', fontSize: 6, lineHeight: 10, marginTop: 3, textAlign: 'right' },
+  safetyTitle: { color: '#A8F0E2', fontSize: 8, fontWeight: '800', textAlign: 'right' },
+  safetyText: { color: '#4E8578', fontSize: 6, lineHeight: 10, marginTop: 3, textAlign: 'right' },
 
   bottomActions: { flexDirection: 'row', gap: 8, paddingHorizontal: 16, paddingTop: 12, paddingBottom: Platform.OS === 'ios' ? 8 : 12 },
   resetAllButton: { width: 105, height: 44, borderRadius: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, backgroundColor: 'rgba(255,255,255,0.045)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)' },

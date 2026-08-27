@@ -89,7 +89,7 @@ android {
 
     namespace 'com.anonymous.buti'
     defaultConfig {
-        applicationId 'com.anonymous.buti'
+        applicationId 'com.butiai.app'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
@@ -155,6 +155,9 @@ android {
 dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
+
+    // 🎯 Expo SDK 54: ماژول‌های expo به‌صورت api از :expo میآیند
+    implementation project(':expo')
 
     def isGifEnabled = (findProperty('expo.gif.enabled') ?: "") == "true";
     def isWebpEnabled = (findProperty('expo.webp.enabled') ?: "") == "true";

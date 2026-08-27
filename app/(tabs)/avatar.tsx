@@ -214,7 +214,7 @@ export default function AvatarScreen() {
                   key={v.key}
                   style={[styles.slot, slots[i] && styles.slotFilled]}
                   activeOpacity={0.85}
-                  onPress={() => pickFor(i)}
+                  onPress={() => pickFromGallery(i)}
                 >
                   {slots[i] ? (
                     <>

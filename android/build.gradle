@@ -26,3 +26,13 @@ allprojects {
     maven { url 'https://www.jitpack.io' }
   }
 }
+
+// 🎯 مقادیر SDK که app/build.gradle انتظار دارد (از RN 0.81 / Expo SDK 54)
+ext {
+  minSdkVersion = 24
+  targetSdkVersion = 36
+  compileSdkVersion = 36
+  // ⚠️ build-tools 36 از آینه‌ها در دسترس نیست — از 35.0.0 استفاده میکنیم (سازگار)
+  buildToolsVersion = "35.0.0"
+  ndkVersion = "27.1.12297006"
+}

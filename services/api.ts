@@ -2,21 +2,14 @@
 import { Platform } from "react-native";
 
 /* ---------------------------------------------------------
-   Backend base URL
-   - Web  -> localhost (same machine)
-   - iOS  -> localhost works on simulator; on a real device
-             replace with your computer's LAN IP.
-   - Android emulator -> 10.0.2.2 maps to host loopback.
-   - Real devices (iOS/Android over Wi-Fi) -> use the LAN IP
-     so the phone can reach the dev machine. Update it when
-     your network changes.
+   Backend base URL — خودکار!
+   IP از hostUri اکسپو کشف می‌شود و با پروب تست می‌شود.
+   دیگه لازم نیست با عوض شدن Wi-Fi دستی تغییرش بدید.
 ---------------------------------------------------------- */
-export const BACKEND_URL = Platform.select({
-  web: "http://localhost:8000",
-  ios: "http://192.168.0.3:8000", // LAN IP — reachable from simulator AND real device
-  android: __DEV__ ? "http://10.0.2.2:8000" : "http://192.168.0.3:8000",
-  default: "http://192.168.0.3:8000",
-});
+import { getBaseUrl, currentBaseUrl } from "./apiConfig";
+
+/** برای سازگاری — URL اولیه قبل از پروب (ترجیحاً از currentBaseUrl استفاده کنید) */
+export const BACKEND_URL = currentBaseUrl();
 
 export interface DoctorInfo {
   id: string;
@@ -93,7 +86,8 @@ export async function sendThreeDRequest(
   formData.append("text", text);
   formData.append("intensity", String(intensity));
 
-  const response = await fetch(`${BACKEND_URL}/api/v1/3d-filter`, {
+  const baseUrl = await getBaseUrl();
+  const response = await fetch(`${baseUrl}/api/v1/3d-filter`, {
     method: "POST",
     headers: {
       "Content-Type": "multipart/form-data",
@@ -139,7 +133,8 @@ export async function sendRetouchRequest(
   } as any);
   formData.append("adjustments", JSON.stringify(adjustments));
 
-  const response = await fetch(`${BACKEND_URL}/api/v1/retouch`, {
+  const baseUrl = await getBaseUrl();
+  const response = await fetch(`${baseUrl}/api/v1/retouch`, {
     method: "POST",
     headers: { "Content-Type": "multipart/form-data" },
     body: formData,
@@ -156,7 +151,8 @@ export async function getRetouchPresets(): Promise<{
   presets: RetouchPreset[];
   tools: RetouchTool[];
 }> {
-  const response = await fetch(`${BACKEND_URL}/api/v1/retouch/presets`);
+  const baseUrl = await getBaseUrl();
+  const response = await fetch(`${baseUrl}/api/v1/retouch/presets`);
   if (!response.ok) throw new Error("خطا در دریافت پریست‌ها");
   return response.json();
 }
@@ -183,7 +179,8 @@ export async function sendManualEditRequest(
   } as any);
   formData.append("edits", JSON.stringify(edits));
 
-  const response = await fetch(`${BACKEND_URL}/api/v1/manual-edit`, {
+  const baseUrl = await getBaseUrl();
+  const response = await fetch(`${baseUrl}/api/v1/manual-edit`, {
     method: "POST",
     headers: { "Content-Type": "multipart/form-data" },
     body: formData,
@@ -232,7 +229,8 @@ export async function buildAvatar3D(
     } as any);
   });
 
-  const response = await fetch(`${BACKEND_URL}/api/v1/avatar-3d`, {
+  const baseUrl = await getBaseUrl();
+  const response = await fetch(`${baseUrl}/api/v1/avatar-3d`, {
     method: "POST",
     headers: { "Content-Type": "multipart/form-data" },
     body: formData,

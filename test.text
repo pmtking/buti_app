@@ -1,28 +1,6 @@
-# ناوبری
-npx expo install @react-navigation/native @react-navigation/native-stack @react-navigation/bottom-tabs
-npx expo install react-native-screens react-native-safe-area-context
-npx expo install react-native-gesture-handler react-native-reanimated
-
-# Expo Router
-npx expo install expo-router
-
-# آیکون‌ها
-npx expo install @expo/vector-icons
-
-# ذخیره‌سازی محلی
-npx expo install @react-native-async-storage/async-storage
-
-# دوربین و گالری
-npx expo install expo-image-picker expo-camera
-
-# Linear Gradient (رنگ‌های فانتزی)
-npx expo install expo-linear-gradient
-
-# Blur Effect (افکت محو)
-npx expo install expo-blur
-
-# Haptic Feedback (لرزش)
-npx expo install expo-haptics
-
-# Status Bar
-npx expo install expo-status-bar
+ببین طرح مد نظر  من  برای  نرم  افزار اینه  که مراجعه  کننده  در  هنگام حضور   بیاد  مثل  دوس  با  هوشمصنوعی  ما  صحبت  کندده  و  به  تصویر  دلخواه  خود  از  صورت  بره   باید  طوری باشه  هوشمصنوعی  ما  دقیق  بدونه  کاربر  چی  میخواد   و سلیقه اش  رو بفهمه  و طرح  رو  اماده  کنه  و  به صورت  سه بعدی  از از  صورت  خود  کاربر  نایش  بده  
+مواردی  که  باید برای  الهام  گرفتن  اپ  چک  کنی  
+https://www.pinterest.com/pin/16255248651168195/
+https://i.pinimg.com/1200x/76/81/24/768124cb8e50ac9ef021a2b05026ec50.jpg
+https://i.pinimg.com/236x/07/08/f4/0708f4637d8ea25612afc20920364056.jpg
+https://i.pinimg.com/736x/87/d5/7d/87d57de38b18eeec4cdbad41653edfc2.jpg

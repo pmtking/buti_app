@@ -3,6 +3,8 @@ import { useFonts } from 'expo-font';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { HeroUINativeProvider } from 'heroui-native';
+import { I18nProvider } from '@/i18n/I18nProvider';
+import { ThemeModeProvider } from '@/hooks/useTheme';
 import React from 'react';
 import { ActivityIndicator, Text as RNText, StyleSheet, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -13,16 +15,16 @@ export const unstable_settings = {
   anchor: '(tabs)',
 };
 
-// تم ثابت روشن
+// تم تیره سه‌بعدی (Aurora Glass)
 const LightAppTheme = {
   ...DefaultTheme,
   colors: {
     ...DefaultTheme.colors,
-    primary: '#2563EB',
-    background: '#DDE9F8',
-    card: '#FFFFFF',
-    text: '#1E293B',
-    border: '#B0CEF5',
+    primary: '#FF6EC7',
+    background: '#12081F',
+    card: '#0C0C14',
+    text: '#F4F2F8',
+    border: 'rgba(255,255,255,0.12)',
   },
 };
 
@@ -48,27 +50,31 @@ export default function RootLayout() {
   if (!fontsLoaded) {
     return (
       <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#2563EB" />
+        <ActivityIndicator size="large" color="#F2A9CE" />
       </View>
     );
   }
 
   return (
-    <GestureHandlerRootView style={{ flex: 1, backgroundColor: '#DDE9F8' }}>
+    <GestureHandlerRootView style={{ flex: 1, backgroundColor: '#12081F' }}>
+      <I18nProvider>
+      <ThemeModeProvider>
       <HeroUINativeProvider>
         <ThemeProvider value={LightAppTheme}>
           <Stack
             screenOptions={{
               headerShown: false,
-              contentStyle: { backgroundColor: '#DDE9F8' },
+              contentStyle: { backgroundColor: '#12081F' },
             }}
           >
             <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
             <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
           </Stack>
-          <StatusBar style="dark" />
+          <StatusBar style="light" />
         </ThemeProvider>
       </HeroUINativeProvider>
+      </ThemeModeProvider>
+      </I18nProvider>
     </GestureHandlerRootView>
   );
 }
@@ -78,6 +84,6 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#DDE9F8',
+    backgroundColor: '#12081F',
   },
 });
