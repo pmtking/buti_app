@@ -7,7 +7,10 @@
 import { Platform } from "react-native";
 import Constants from "expo-constants";
 
-const PORT = 8000;
+/** 🆕 سرور اصلی (production) — بک‌اند مدل روی این آدرس از طریق nginx در دسترس است */
+export const PROD_BASE_URL = "http://82.115.16.223";
+
+const PORT = 80;
 
 /** استخراج هاست از hostUri اکسپو مثل «192.168.1.5:8081» */
 function expoHost(): string | null {
@@ -38,7 +41,12 @@ export function candidateUrls(): string[] {
   const host = expoHost();
   const list: string[] = [];
 
-  // ۱) IP واقعی سیستم میزبان از اکسپو (بهترین گزینه برای گوشی روی Wi-Fi)
+  // 🆕 ۰) سرور اصلی (production) — همیشه اول امتحان می‌شود
+  //     اگر اپ از سرور دانلود شده، باید به همین سرور وصل شود
+  list.push(`${PROD_BASE_URL}:${PORT}`);
+  list.push(PROD_BASE_URL);
+
+  // ۱) IP واقعی سیستم میزبان از اکسپو (بهترین گزینه برای گوشی روی Wi-Fi در حالت dev)
   if (host && host !== "localhost" && host !== "127.0.0.1") {
     list.push(`http://${host}:${PORT}`);
   }
@@ -58,26 +66,21 @@ export function candidateUrls(): string[] {
 }
 
 /** URL پیش‌فرض هم‌زمان (قبل از پروب) — برای سازگاری فوری */
-export const BACKEND_URL_INITIAL: string =
-  Platform.select({
-    web: `http://localhost:${PORT}`,
-    default: (() => {
-      const host = expoHost();
-      if (Platform.OS === "android" && isAndroidEmulator(host)) return `http://10.0.2.2:${PORT}`;
-      if (host) return `http://${host}:${PORT}`;
-      return `http://localhost:${PORT}`;
-    })(),
-  }) ?? `http://localhost:${PORT}`;
+export const BACKEND_URL_INITIAL: string = PROD_BASE_URL;
 
 let resolvedUrl: string | null = null;
 let resolving: Promise<string> | null = null;
 
 /** یک URL را با درخواست HEAD سبک تست کن (timeout کوتاه) */
-async function probe(url: string, timeoutMs = 1200): Promise<boolean> {
+async function probe(url: string, timeoutMs = 2000): Promise<boolean> {
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-    const res = await fetch(`${url}/docs`, { method: "HEAD", signal: ctrl.signal });
+    // از مسیر عمومی (nginx → backend) استفاده کن؛ /docs پشت nginx نیست
+    const res = await fetch(`${url}/api/v1/chat/health`, {
+      method: "GET",
+      signal: ctrl.signal,
+    });
     clearTimeout(timer);
     return res.status < 500;
   } catch {
