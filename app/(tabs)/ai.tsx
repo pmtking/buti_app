@@ -70,7 +70,7 @@ import { useRouter } from 'expo-router';
 import AnimatedBackground from '../../components/AnimatedBackground';
 import ChatSkeleton from '../../components/ChatSkeleton';
 import AreaScanFrame from '../../components/AreaScanFrame';
-import { sendThreeDRequest, ThreeDResponse, Recommendation, sendManualEditRequest } from '../../services/api';
+import { sendThreeDRequest, ThreeDResponse, Recommendation, sendManualEditRequest, sendStyleEdit, getEditStyles, getEditActions, StyleOption, EditAction } from '../../services/api';
 import { sendChatMessage } from '../../services/chat';
 
 /* =========================================================
@@ -442,6 +442,127 @@ export default function AiScreen() {
   const [manualEdits, setManualEdits] = useState<Record<string, number>>({});
   const [isEditing, setIsEditing] = useState(false);
   const [editBase, setEditBase] = useState<string | null>(null); // عکس پایه برای ادیت
+
+  /* ═══ STYLE EDIT — استایل‌های تخصصی هر ناحیه ═══ */
+  const [styleArea, setStyleArea] = useState('lip');
+  const [styleOptions, setStyleOptions] = useState<StyleOption[]>([]);
+  const [editActions, setEditActions] = useState<EditAction[]>([]);
+  const [showStylePanel, setShowStylePanel] = useState(false);
+  const [selectedStyle, setSelectedStyle] = useState<string | null>(null);
+  const [selectedAction, setSelectedAction] = useState<string | null>(null);
+  const [styleIntensity, setStyleIntensity] = useState(0.7);
+  const [isStyleLoading, setIsStyleLoading] = useState(false);
+
+  /* ═══ پیشنهادات هوشمند چت ═══ */
+  const [chatSuggestions] = useState<string[]>([
+    'بینی کوچیکتر و قلمی',
+    'لب پرتر و قلوه‌ای',
+    'گونه‌های برجسته‌تر',
+    'فک تیزتر و مشخص',
+    'خط چشم کشیده‌تر',
+    'پیشانی صاف‌تر',
+  ]);
+
+  /** دریافت استایل‌های ناحیه انتخاب‌شده از سرور */
+  const loadStyles = useCallback(
+    async (area: string) => {
+      setStyleArea(area);
+      setIsStyleLoading(true);
+      try {
+        const res = await getEditStyles(area);
+        setStyleOptions(res.styles || []);
+        if (res.styles?.length) setSelectedStyle(res.styles[0].id);
+      } catch (e) {
+        // fallback محلی اگر سرور جواب نداد
+        const fallback: Record<string, StyleOption[]> = {
+          lip: [
+            { id: 'heart_shape', name: 'قلوه‌ای' },
+            { id: 'russian', name: 'روسی' },
+            { id: 'brazilian', name: 'برزیلی' },
+            { id: 'hollywood', name: 'هالیوودی' },
+            { id: 'classic', name: 'کلاسیک' },
+            { id: 'natural', name: 'طبیعی' },
+          ],
+          nose: [
+            { id: 'ideal_realistic', name: 'ایده‌آل واقعی' },
+            { id: 'slim_bridge', name: 'قلمی' },
+            { id: 'doll_tip', name: 'عروسکی' },
+            { id: 'natural', name: 'طبیعی' },
+          ],
+          cheek: [
+            { id: 'volumized', name: 'برجسته' },
+            { id: 'contoured', name: 'کانتوردار' },
+            { id: 'soft', name: 'نرم' },
+            { id: 'natural', name: 'طبیعی' },
+          ],
+          jaw: [
+            { id: 'v_line', name: 'خط V' },
+            { id: 'slim', name: 'باریک' },
+            { id: 'defined', name: 'مشخص' },
+            { id: 'natural', name: 'طبیعی' },
+          ],
+          eye: [
+            { id: 'bigger', name: 'درشت‌تر' },
+            { id: 'cat_eye', name: 'چشم گربه‌ای' },
+            { id: 'almond', name: 'بادامی' },
+            { id: 'natural', name: 'طبیعی' },
+          ],
+          forehead: [
+            { id: 'smooth', name: 'صاف' },
+            { id: 'soft', name: 'نرم' },
+            { id: 'natural', name: 'طبیعی' },
+          ],
+        };
+        setStyleOptions(fallback[area] || fallback.nose);
+        if (fallback[area]?.length) setSelectedStyle(fallback[area][0].id);
+      } finally {
+        setIsStyleLoading(false);
+      }
+    },
+    []
+  );
+
+  /** دریافت اکشن‌های ادیت از سرور */
+  useEffect(() => {
+    getEditActions()
+      .then((res) => res.actions && setEditActions(res.actions))
+      .catch(() => {});
+    loadStyles('lip');
+  }, [loadStyles]);
+
+  /** اعمال ادیت استایل روی عکس */
+  const applyStyleEdit = async () => {
+    if (!capturedImage) {
+      Alert.alert('عکس لازم است', 'اول یک عکس بگیر یا از گالری انتخاب کن');
+      return;
+    }
+    setIsEditing(true);
+    try {
+      const style = styleOptions.find((s) => s.id === selectedStyle);
+      const action = editActions.find((a) => a.id === selectedAction);
+      const prompt = `${style?.name || ''} ${action?.name || ''}`.trim();
+      const res = await sendStyleEdit(capturedImage, prompt || `${styleArea} بهینه`, styleArea, selectedAction || undefined, styleIntensity);
+      if (res.image) {
+        setFilteredImage(res.image);
+        setApiResponse((prev) => (prev ? { ...prev, image: res.image, filtered_image: res.image } : prev));
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: Date.now().toString(),
+            type: 'ai',
+            text: `✨ ادیت «${style?.name || selectedAction || styleArea}» انجام شد!`,
+            time: nowFa(),
+          },
+        ]);
+      } else {
+        Alert.alert('خطا', res.error || res.description || 'ادیت انجام نشد');
+      }
+    } catch (e: any) {
+      Alert.alert('خطا', e.message || 'ادیت ناموفق بود');
+    } finally {
+      setIsEditing(false);
+    }
+  };
 
   const changeEdit = (key: string, delta: number) => {
     setManualEdits((prev) => {
@@ -1377,6 +1498,124 @@ export default function AiScreen() {
                   </>
                 )}
               </TouchableOpacity>
+
+              {/* ═══ ادیت استایل پیشرفته (دکمه) ═══ */}
+              <TouchableOpacity
+                style={styles.styleToggleBtn}
+                onPress={() => setShowStylePanel(!showStylePanel)}
+                activeOpacity={0.8}
+              >
+                <Sparkles size={14} color="#F0CD8B" />
+                <Text style={styles.styleToggleText}>
+                  {showStylePanel ? 'بستن ادیت پیشرفته ▲' : 'ادیت پیشرفته با استایل ✨'}
+                </Text>
+              </TouchableOpacity>
+
+              {/* ═══ پنل ادیت استایل ═══ */}
+              {showStylePanel && (
+                <View style={styles.editStylePanel}>
+                  {/* انتخاب ناحیه */}
+                  <Text style={styles.editStyleLabel}>ناحیه</Text>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+                    {EDIT_AREAS.map((a) => (
+                      <TouchableOpacity
+                        key={a.key}
+                        style={[styles.areaChip, styleArea === a.key && styles.areaChipActive]}
+                        onPress={() => loadStyles(a.key)}
+                        activeOpacity={0.7}
+                      >
+                        <Text style={[styles.areaChipText, styleArea === a.key && styles.areaChipTextActive]}>
+                          {a.emoji} {a.label}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+
+                  {/* اکشن */}
+                  {editActions.length > 0 && (
+                    <>
+                      <Text style={styles.editStyleLabel}>مقدار تغییر</Text>
+                      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+                        {editActions.map((act) => (
+                          <TouchableOpacity
+                            key={act.id}
+                            style={[styles.areaChip, selectedAction === act.id && styles.areaChipActive]}
+                            onPress={() => setSelectedAction(selectedAction === act.id ? null : act.id)}
+                            activeOpacity={0.7}
+                          >
+                            <Text style={[styles.areaChipText, selectedAction === act.id && styles.areaChipTextActive]}>
+                              {act.name}
+                            </Text>
+                          </TouchableOpacity>
+                        ))}
+                      </ScrollView>
+                    </>
+                  )}
+
+                  {/* استایل‌ها */}
+                  {styleOptions.length > 0 && (
+                    <>
+                      <Text style={styles.editStyleLabel}>استایل</Text>
+                      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+                        {styleOptions.map((s) => (
+                          <TouchableOpacity
+                            key={s.id}
+                            style={[styles.areaChip, selectedStyle === s.id && styles.areaChipActive]}
+                            onPress={() => setSelectedStyle(s.id)}
+                            activeOpacity={0.7}
+                          >
+                            <Text style={[styles.areaChipText, selectedStyle === s.id && styles.areaChipTextActive]}>
+                              {s.emoji || '✨'} {s.name}
+                            </Text>
+                          </TouchableOpacity>
+                        ))}
+                      </ScrollView>
+                    </>
+                  )}
+
+                  {/* شدت */}
+                  <Text style={styles.editStyleLabel}>
+                    شدت: {Math.round(styleIntensity * 100)}%
+                  </Text>
+                  <View style={styles.intensityRow}>
+                    <Text style={styles.intensityMin}>کم</Text>
+                    <View style={styles.intensityTrack}>
+                      <View style={[styles.intensityFill, { width: `${styleIntensity * 100}%` }]} />
+                    </View>
+                    <Text style={styles.intensityMax}>زیاد</Text>
+                  </View>
+                  <View style={styles.intensityButtons}>
+                    {[0.3, 0.5, 0.7, 0.9].map((v) => (
+                      <TouchableOpacity
+                        key={v}
+                        style={[styles.intensityChip, Math.abs(styleIntensity - v) < 0.15 && styles.areaChipActive]}
+                        onPress={() => setStyleIntensity(v)}
+                      >
+                        <Text style={[styles.areaChipText, Math.abs(styleIntensity - v) < 0.15 && styles.areaChipTextActive]}>
+                          {Math.round(v * 100)}%
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+
+                  {/* دکمه اعمال */}
+                  <TouchableOpacity
+                    style={[styles.applyEditBtn, isEditing && styles.sendButtonDisabled]}
+                    disabled={isEditing}
+                    onPress={applyStyleEdit}
+                    activeOpacity={0.85}
+                  >
+                    {isEditing ? (
+                      <ActivityIndicator size="small" color="#1A1420" />
+                    ) : (
+                      <>
+                        <Sparkles size={14} color="#1A1420" />
+                        <Text style={styles.applyEditText}>اعمال ادیت پیشرفته</Text>
+                      </>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              )}
             </View>
           )}
 
@@ -2375,4 +2614,21 @@ const styles = StyleSheet.create({
   simulateButton: { flex: 1, height: 44, borderRadius: 14, overflow: 'hidden' },
   simulateGradient: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7 },
   simulateText: { color: '#FFFFFF', fontSize: 10, fontWeight: '800' },
+
+  /* ═══ ادیت پیشرفته با استایل ═══ */
+  styleToggleBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 14, paddingVertical: 13, borderRadius: 14, backgroundColor: 'rgba(232,193,112,0.07)', borderWidth: 1, borderColor: 'rgba(232,193,112,0.25)' },
+  styleToggleText: { color: '#F0CD8B', fontSize: 11, fontWeight: '800' },
+  editStylePanel: { marginTop: 12, padding: 14, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.035)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.07)' },
+  editStyleLabel: { color: '#CCA65E', fontSize: 9, fontWeight: '800', marginTop: 10, marginBottom: 7, textAlign: 'right' },
+  areaChip: { paddingHorizontal: 13, paddingVertical: 8, borderRadius: 999, backgroundColor: 'rgba(255,255,255,0.05)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' },
+  areaChipActive: { backgroundColor: 'rgba(232,193,112,0.2)', borderColor: '#E8C170' },
+  areaChipText: { color: '#B8B8BF', fontSize: 10, fontWeight: '600' },
+  areaChipTextActive: { color: '#F3DD9E', fontWeight: '800' },
+  intensityRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 },
+  intensityMin: { color: '#77777F', fontSize: 8 },
+  intensityMax: { color: '#77777F', fontSize: 8 },
+  intensityTrack: { flex: 1, height: 6, borderRadius: 99, backgroundColor: 'rgba(255,255,255,0.08)', overflow: 'hidden' },
+  intensityFill: { height: '100%', borderRadius: 99, backgroundColor: '#E8C170' },
+  intensityButtons: { flexDirection: 'row', gap: 8, marginTop: 10 },
+  intensityChip: { flex: 1, alignItems: 'center', paddingVertical: 8, borderRadius: 10, backgroundColor: 'rgba(255,255,255,0.045)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)' },
 });

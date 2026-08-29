@@ -194,38 +194,154 @@ export async function sendManualEditRequest(
 }
 
 /* =========================================================
-   🧊 AVATAR 3D — بازسازی سه‌بعدی از چند زاویه
+   🎯 STYLE EDIT — ادیت تخصصی با استایل‌های ناحیه‌ای
+   (مثل: بینی قلمی، لب روسی، فک تیز)
+========================================================= */
+
+export interface StyleOption {
+  id: string;
+  name: string;
+  description?: string;
+  emoji?: string;
+}
+
+export interface EditAction {
+  id: string;
+  name: string;
+  description?: string;
+}
+
+export interface StyleEditResult {
+  status: string;
+  image: string;
+  description?: string;
+  changes?: any;
+  processing_time?: number;
+  error?: string;
+}
+
+export async function getEditStyles(area: string): Promise<{
+  status: string;
+  area: string;
+  styles: StyleOption[];
+}> {
+  const baseUrl = await getBaseUrl();
+  const response = await fetch(`${baseUrl}/api/v1/edit/styles?area=${encodeURIComponent(area)}`);
+  if (!response.ok) throw new Error("خطا در دریافت استایل‌ها");
+  return response.json();
+}
+
+export async function getEditAreas(): Promise<{
+  areas: { key: string; label: string; emoji: string }[];
+  actions: EditAction[];
+}> {
+  const baseUrl = await getBaseUrl();
+  const [stylesRes, actionsRes] = await Promise.all([
+    fetch(`${baseUrl}/api/v1/edit/styles`),
+    fetch(`${baseUrl}/api/v1/edit/actions`),
+  ]);
+  if (!stylesRes.ok || !actionsRes.ok) throw new Error("خطا در دریافت ابزارها");
+  // styles به صورت پیش‌فرض برای هر area لیست می‌دهد، ما areas را استخراج می‌کنیم
+  return actionsRes.json() as any;
+}
+
+export async function getEditActions(): Promise<{
+  status: string;
+  actions: EditAction[];
+}> {
+  const baseUrl = await getBaseUrl();
+  const response = await fetch(`${baseUrl}/api/v1/edit/actions`);
+  if (!response.ok) throw new Error("خطا در دریافت اکشن‌ها");
+  return response.json();
+}
+
+/** ادیت پیشرفته با متن طبیعی (مثل: «بینی کوچیکتر قلمی») */
+export async function sendStyleEdit(
+  imageBase64: string,
+  naturalText: string,
+  area?: string,
+  action?: string,
+  intensity: number = 0.7,
+): Promise<StyleEditResult> {
+  const formData = new FormData();
+  const uri = `data:image/jpeg;base64,${imageBase64}`;
+  formData.append("file", {
+    uri,
+    type: "image/jpeg",
+    name: "photo.jpg",
+  } as any);
+  // متن طبیعی بهترین است — بک‌اند AI آن را می‌فهمد
+  let prompt = naturalText;
+  if (area && action) {
+    prompt = `${area} ${action} ${naturalText}`;
+  }
+  formData.append("text", prompt);
+  formData.append("intensity", String(intensity));
+  if (area) formData.append("area", area);
+  if (action) formData.append("action", action);
+
+  const baseUrl = await getBaseUrl();
+  const response = await fetch(`${baseUrl}/api/v1/edit`, {
+    method: "POST",
+    headers: { "Content-Type": "multipart/form-data" },
+    body: formData,
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.message || data.detail || "خطا در ادیت استایل");
+  }
+  // پاسخ سرور: {status, message, processing_time} + data.image
+  return {
+    status: data.status || "success",
+    image: data.data?.image || data.image || "",
+    description: data.message,
+    changes: data.changes,
+    processing_time: data.processing_time,
+  };
+}
+
+/* =========================================================
+   🎭 AVATAR 3D
 ========================================================= */
 
 export interface Avatar3DResponse {
   status: string;
   views_used: number;
-  yaws: number[];
-  mesh: {
+  yaws?: number[];
+  mesh?: {
     vertices: number[][];
-    uvs: number[][];
     faces: number[][];
     num_vertices: number;
     num_faces: number;
   };
-  texture: string | null;
-  preview: string | null;
-  message: string;
+  texture?: string;
+  s3d_url?: string | null;
+  three_d?: {
+    vertices: number[][];
+    uvs?: number[][];
+    faces: number[][];
+    texture: string;
+    num_vertices: number;
+    num_faces: number;
+  };
+  image?: string;
+  message?: string;
+  error?: string;
 }
 
-/**
- * imagesB64: [جلو (اجباری), نیم‌رخ چپ (اختیاری), نیم‌رخ راست (اختیاری)]
- */
+/** ساخت آواتار سه‌بعدی از عکس‌ها — ورودی آرایه‌ای از base64 تصاویر */
 export async function buildAvatar3D(
-  imagesB64: string[],
+  images: string[],
 ): Promise<Avatar3DResponse> {
   const formData = new FormData();
-  imagesB64.slice(0, 4).forEach((b64, i) => {
-    const uri = `data:image/jpeg;base64,${b64}`;
-    formData.append("files", {
-      uri,
+  images.forEach((b64, i) => {
+    const names = ["front", "left", "right"];
+    const name = names[i] || `view${i}`;
+    formData.append(`${name}_image`, {
+      uri: `data:image/jpeg;base64,${b64}`,
       type: "image/jpeg",
-      name: `view_${i}.jpg`,
+      name: `${name}.jpg`,
     } as any);
   });
 
@@ -236,9 +352,52 @@ export async function buildAvatar3D(
     body: formData,
   });
 
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error || data.message || data.detail || "خطا در ساخت آواتار");
+  }
+  // نرمال‌سازی پاسخ به ساختار مورد انتظار اپ
+  return {
+    status: data.status || "success",
+    views_used: data.views_used || images.length,
+    yaws: data.yaws || [],
+    // سه‌بعدی از three_d استخراج می‌شود
+    mesh: data.three_d
+      ? {
+          vertices: data.three_d.vertices,
+          faces: data.three_d.faces,
+          num_vertices: data.three_d.num_vertices,
+          num_faces: data.three_d.num_faces,
+        }
+      : data.mesh,
+    texture: data.three_d?.texture || data.texture,
+    s3d_url: data.s3d_url,
+    image: data.image,
+    message: data.message,
+  };
+}
+
+export async function sendAvatar3DRequest(
+  imageBase64: string,
+  text: string,
+  intensity: number = 0.7,
+): Promise<ThreeDResponse> {
+  const formData = new FormData();
+  const uri = `data:image/jpeg;base64,${imageBase64}`;
+  formData.append("file", { uri, type: "image/jpeg", name: "photo.jpg" } as any);
+  formData.append("text", text);
+  formData.append("intensity", String(intensity));
+
+  const baseUrl = await getBaseUrl();
+  const response = await fetch(`${baseUrl}/api/v1/avatar-3d`, {
+    method: "POST",
+    headers: { "Content-Type": "multipart/form-data" },
+    body: formData,
+  });
+
   if (!response.ok) {
     const error = await response.json();
-    throw new Error(error.error || "خطا در ساخت آواتار سه‌بعدی");
+    throw new Error(error.error || "خطا در ساخت آواتار");
   }
   return response.json();
 }

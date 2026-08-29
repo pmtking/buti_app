@@ -196,7 +196,7 @@ export default function AvatarScreen() {
                 {result.mesh?.num_faces?.toLocaleString('fa-IR')} مثلث
               </Text>
             </View>
-            {result.yaws?.length > 1 && (
+            {result.yaws && result.yaws.length > 1 && (
               <Text style={styles.resultSub}>
                 زوایای استفاده‌شده: {result.yaws.map((y) => `${Math.round(y)}°`).join(' ، ')}
               </Text>
